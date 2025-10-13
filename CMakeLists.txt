@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "src/jc4880p433c_bsp.c"
+         "src/bsp_display.c"
          "src/bsp_touch.c"
          "src/bsp_i2c.c"
          "src/bsp_camera.c"
