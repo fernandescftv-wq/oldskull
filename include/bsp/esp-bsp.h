@@ -105,19 +105,26 @@ extern "C" {
  **************************************************************************************************/
 
 /**
- * @brief Initialize I2C bus
+ * @brief Initialize shared I2C bus (for GT911 touch + camera sensors)
+ * 
+ * Initializes I2C bus shared between GT911 touch controller and camera sensors.
+ * Physical pins: SCL=GPIO8, SDA=GPIO7 (per JC4880P433C board design)
+ * 
+ * @note Call this once before using either touch or camera functionality
+ * @note Safe to call multiple times - will return ESP_OK if already initialized
  * 
  * @return
- *      - ESP_OK                On success
+ *      - ESP_OK                On success or already initialized
  *      - ESP_ERR_INVALID_ARG   I2C parameter error
  *      - ESP_FAIL              I2C driver installation error
  */
 esp_err_t bsp_i2c_init(void);
 
 /**
- * @brief Get I2C bus handle
+ * @brief Get shared I2C bus handle
  *
- * @return I2C bus handle
+ * @note Must call bsp_i2c_init() first before getting handle
+ * @return I2C bus handle (shared between GT911 touch + camera sensors)
  */
 i2c_master_bus_handle_t bsp_i2c_get_handle(void);
 

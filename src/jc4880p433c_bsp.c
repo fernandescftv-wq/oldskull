@@ -14,7 +14,6 @@
 #include "bsp/esp-bsp.h"
 
 static const char *TAG = "JC4880P433C_BSP";
-static i2c_master_bus_handle_t i2c_handle = NULL;
 
 // ST7701 vendor initialization sequence for 480x800 panel
 static const st7701_lcd_init_cmd_t st7701_lcd_cmds[] = {
@@ -66,22 +65,8 @@ static const st7701_lcd_init_cmd_t st7701_lcd_cmds[] = {
     {0x29, (uint8_t[]){0x00}, 1, 20},
 };
 
-esp_err_t bsp_i2c_init(void)
-{
-    if (i2c_handle) return ESP_OK;
-    i2c_master_bus_config_t i2c_bus_conf = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .sda_io_num = BSP_I2C_SDA,
-        .scl_io_num = BSP_I2C_SCL,
-        .i2c_port = 1,
-    };
-    return i2c_new_master_bus(&i2c_bus_conf, &i2c_handle);
-}
-
-i2c_master_bus_handle_t bsp_i2c_get_handle(void)
-{
-    return i2c_handle;
-}
+// NOTE: bsp_i2c_init() and bsp_i2c_get_handle() are implemented in bsp_i2c.c
+// The shared I2C bus (GPIO7/GPIO8) is used by both GT911 touch and camera sensors
 
 esp_err_t bsp_spiffs_mount(void)
 {
