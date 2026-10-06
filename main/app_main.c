@@ -1,0 +1,240 @@
+#include "bsp/esp-bsp.h"
+#include "video_loop.h"
+#include "palco.h"
+#include "wifi.h"
+#include "web_server.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "lvgl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdio.h>
+#include <string.h>
+
+static const char *TAG = "oldskull_app";
+
+/* Label do preset na tela 1 — atualizado pelo callback de palco_registrar_nome */
+static lv_obj_t *lbl_preset_t1 = NULL;
+
+/* Callback nome: quando renomeia preset na tela 2, atualiza lbl_preset_t1 */
+static void on_preset_nome(const char *nome)
+{
+    if (lbl_preset_t1) {
+        lv_label_set_text(lbl_preset_t1, nome);
+        ESP_LOGI(TAG, "tela1: preset atualizado para '%s'", nome);
+    }
+}
+
+/* Callback cor: quando muda cor das letras em SISTEMA, atualiza lbl_preset_t1 */
+static void on_preset_cor(uint32_t cor)
+{
+    if (lbl_preset_t1) {
+        lv_obj_set_style_text_color(lbl_preset_t1, lv_color_hex(cor), LV_PART_MAIN);
+        ESP_LOGI(TAG, "tela1: cor alterada para #%06lX", (unsigned long)cor);
+    }
+}
+
+/* Callback estilo/fonte: quando troca Estilo das letras, atualiza lbl_preset_t1 */
+static void on_preset_fonte(const lv_font_t *fonte)
+{
+    if (lbl_preset_t1) {
+        lv_obj_set_style_text_font(lbl_preset_t1, fonte, LV_PART_MAIN);
+        ESP_LOGI(TAG, "tela1: fonte alterada");
+    }
+}
+
+/* Fonte declarada externamente por palco.c */
+LV_FONT_DECLARE(fonte_preset_42);
+
+extern const lv_img_dsc_t amp_lonestar;
+extern const lv_img_dsc_t amp_soldano;
+extern const lv_img_dsc_t amp_jp2c;
+
+#define QTD_AMPS 3
+
+static const lv_img_dsc_t *amp_img[QTD_AMPS] = {
+    &amp_lonestar, &amp_soldano, &amp_jp2c
+};
+static const char *amp_nome[QTD_AMPS] = { "LONESTAR", "SOLDANO", "JP-2C" };
+
+static lv_obj_t *amp_obj[QTD_AMPS];
+static int amp_atual = 0;
+
+static void amp_set_x(void *obj, int32_t v) { lv_obj_set_x(obj, v); }
+static void amp_set_y(void *obj, int32_t v) { lv_obj_set_y(obj, v); }
+
+static void arranjar_carrossel(void)
+{
+    for (int i = 0; i < QTD_AMPS; i++) {
+        if (!amp_obj[i]) continue;
+
+        int d = i - amp_atual;
+        if (d < -1) d += QTD_AMPS;
+        if (d >  1) d -= QTD_AMPS;
+
+        int w = amp_img[i]->header.w;
+        int cx, cy;
+        if (d == 0)       { cx = 400; cy = 261; }   /* -7: amps sobem p/ dar espaco aos pedais */
+        else if (d == -1) { cx = 140; cy = 161; }
+        else              { cx = 660; cy = 161; }
+
+        int tx = cx - w / 2, ty = cy - 150;
+
+        lv_obj_clear_flag(amp_obj[i], LV_OBJ_FLAG_HIDDEN);
+        if (d == 0) {
+            lv_obj_move_foreground(amp_obj[i]);
+            lv_obj_set_style_opa(amp_obj[i], LV_OPA_COVER, 0);
+        } else {
+            lv_obj_move_background(amp_obj[i]);
+            lv_obj_set_style_opa(amp_obj[i], LV_OPA_50, 0);
+        }
+
+        lv_anim_t ax;
+        lv_anim_init(&ax);
+        lv_anim_set_var(&ax, amp_obj[i]);
+        lv_anim_set_time(&ax, 350);
+        lv_anim_set_path_cb(&ax, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&ax, amp_set_x);
+        lv_anim_set_values(&ax, lv_obj_get_x(amp_obj[i]), tx);
+        lv_anim_start(&ax);
+
+        lv_anim_t ay;
+        lv_anim_init(&ay);
+        lv_anim_set_var(&ay, amp_obj[i]);
+        lv_anim_set_time(&ay, 350);
+        lv_anim_set_path_cb(&ay, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&ay, amp_set_y);
+        lv_anim_set_values(&ay, lv_obj_get_y(amp_obj[i]), ty);
+        lv_anim_start(&ay);
+    }
+}
+
+static void criar_carrossel(lv_obj_t *tela)
+{
+    lv_obj_t *cont = lv_obj_create(tela);
+    lv_obj_remove_style_all(cont);
+    lv_obj_set_size(cont, 800, 480);
+    lv_obj_set_pos(cont, 0, 0);
+    lv_obj_clear_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_move_foreground(cont);
+
+    for (int i = 0; i < QTD_AMPS; i++) {
+        lv_obj_t *im = lv_img_create(cont);
+        lv_img_set_src(im, amp_img[i]);
+        lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(im, LV_OBJ_FLAG_SCROLLABLE);
+        amp_obj[i] = im;
+    }
+    arranjar_carrossel();
+}
+
+/* chamado pelo menu AMP (palco.c) para trocar o amp do carrossel. */
+void app_trocar_amp(void)
+{
+    amp_atual = (amp_atual + 1) % QTD_AMPS;
+    arranjar_carrossel();
+    ESP_LOGI(TAG, "amp: %s", amp_nome[amp_atual]);
+}
+
+int app_amp_atual(void)   /* amp em destaque agora (0..2) */
+{
+    return amp_atual;
+}
+
+static int16_t toque_inicio_x = 0;
+static int16_t toque_inicio_y = 0;
+
+static void evento_toque(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    lv_point_t p;
+    if (indev == NULL) return;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        toque_inicio_x = p.x;
+        toque_inicio_y = p.y;
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED) {
+        int16_t dx = p.x - toque_inicio_x;
+        int16_t dy = p.y - toque_inicio_y;
+        int16_t adx = dx < 0 ? -dx : dx;
+        int16_t ady = dy < 0 ? -dy : dy;
+
+        if (adx < 24 && ady < 24 && p.y < 70) {
+            video_toggle_pause();
+            return;
+        }
+
+        if (ady > 50 && ady > adx * 2) {
+            amp_atual = (amp_atual + (dy < 0 ? 1 : -1) + QTD_AMPS) % QTD_AMPS;
+            arranjar_carrossel();
+            ESP_LOGI(TAG, "amp: %s", amp_nome[amp_atual]);
+            return;
+        }
+    }
+}
+
+static lv_obj_t *criar_tela(void)
+{
+    lv_obj_t *tela = lv_obj_create(NULL);
+    lv_obj_clear_flag(tela, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(tela, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_bg_color(tela, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tela, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tela, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tela, 0, LV_PART_MAIN);
+
+    lv_obj_add_flag(tela, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(tela, evento_toque, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(tela, evento_toque, LV_EVENT_RELEASED, NULL);
+
+    /* Label do nome do preset — atualizado pelo callback de palco.c */
+    lbl_preset_t1 = lv_label_create(tela);
+    lv_label_set_text(lbl_preset_t1, "PRESET");
+    lv_obj_set_style_bg_color(lbl_preset_t1, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(lbl_preset_t1, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl_preset_t1, lv_color_hex(0xF3C969), LV_PART_MAIN);
+    lv_obj_set_style_text_font(lbl_preset_t1, &fonte_preset_42, LV_PART_MAIN);
+    lv_obj_align(lbl_preset_t1, LV_ALIGN_TOP_MID, 0, 50);
+
+    return tela;
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Inicializando display JC4880P433C...");
+
+    lv_display_t *display = bsp_display_start();
+    if (display == NULL) {
+        ESP_LOGE(TAG, "Falha ao inicializar o display");
+        return;
+    }
+    ESP_ERROR_CHECK(bsp_display_backlight_on());
+
+    if (bsp_display_lock(1000)) {
+        lv_obj_t *tela = criar_tela();
+        video_loop_start(tela);
+        video_set_fps(8);                     /* alivia o sw_rotate (24fps esgotava) */
+        criar_carrossel(tela);
+        palco_montar(tela);                       /* UI steampunk (menus, PEDAIS) sobre o cenario */
+        palco_registrar_cor(on_preset_cor);       /* sincroniza cor com lbl_preset_t1 */
+        palco_registrar_fonte(on_preset_fonte);   /* sincroniza fonte com lbl_preset_t1 */
+        palco_registrar_nome(on_preset_nome);     /* atualiza lbl_preset_t1 ao renomear preset */
+        lv_scr_load(tela);
+        bsp_display_unlock();
+        ESP_LOGI(TAG, "video + carrossel + palco prontos");
+    }
+
+    /* WiFi AP (old_skull) + HTTP server para controlar desde el celular */
+    wifi_init_ap();
+    web_server_init();
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

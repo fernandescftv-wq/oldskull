@@ -36,4 +36,4 @@ Thumbs.db
 
 # Dependencies
 managed_components/
-dependencies.lock
+dependencies.lockcomponents/

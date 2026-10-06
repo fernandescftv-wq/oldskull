@@ -166,7 +166,7 @@ bsp_display_cfg_t bsp_display_get_default_config(void)
         .flags = {
             .buff_dma = true,
             .buff_spiram = true,
-            .sw_rotate = false,
+            .sw_rotate = true,
         }
     };
     return cfg;
@@ -263,13 +263,22 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
         // Portrait 480x800 timing, no XY swap
         .rotation = { .swap_xy = false, .mirror_x = false, .mirror_y = false },
 #if LVGL_VERSION_MAJOR >= 9
-        .color_format = LV_COLOR_FORMAT_RGB565,
+        .color_format = LV_IMG_CF_TRUE_COLOR,
 #endif
         .flags = { .buff_dma = cfg->flags.buff_dma, .buff_spiram = cfg->flags.buff_spiram, .sw_rotate = cfg->flags.sw_rotate }
     };
     // Disable avoid_tearing initially to prevent blocking on VSYNC during bring-up
     const lvgl_port_display_dsi_cfg_t dsi_cfg = { .flags = { .avoid_tearing = false } };
     lv_display_t *disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
+
+    /* Landscape 800x480: rotacao por SOFTWARE (Abordagem A validada 24-09).
+     * Painel fisico segue 480x800 nativo; SEM MADCTL, SEM swap_xy.
+     * NUNCA aplicar 2 rotacoes simultaneas (divide a tela em 4). */
+#if LVGL_VERSION_MAJOR >= 9
+    lv_disp_set_rotation(disp, LV_DISP_ROT_90);
+#else
+    lv_disp_set_rotation(disp, LV_DISP_ROT_90);
+#endif
 
     // Touch - using modular touch API
     esp_lcd_touch_handle_t tp;
