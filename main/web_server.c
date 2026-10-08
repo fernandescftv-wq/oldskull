@@ -5,8 +5,35 @@
 #include "web_html.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 static const char *TAG = "web_server";
+
+static httpd_handle_t g_server = NULL;
+esp_err_t web_server_init(void);   /* definida abaixo; enable chama cedo */
+
+esp_err_t web_server_stop(void)
+{
+    if (g_server) {
+        httpd_stop(g_server);
+        g_server = NULL;
+        ESP_LOGI(TAG, "HTTP server parado");
+        return ESP_OK;
+    }
+    return ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t web_server_enable(bool on)
+{
+    int n = (g_server != NULL);
+    if (on && !n) {
+        esp_err_t e = web_server_init();
+        ESP_LOGI(TAG, "web reabilitada: %s", e==ESP_OK?"OK":"falhou");
+        return e;
+    }
+    if (!on && n) return web_server_stop();
+    return ESP_OK;
+}
 
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
@@ -75,6 +102,7 @@ esp_err_t web_server_init(void)
         ESP_LOGE(TAG, "Falha ao iniciar HTTP server: %s", esp_err_to_name(ret));
         return ret;
     }
+    g_server = server;
 
     httpd_uri_t uri_get = {
         .uri = "/",

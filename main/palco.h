@@ -15,6 +15,7 @@ const char *palco_get_preset(void);
 /* Alterna o amp mostrado (um por vez, sem sobreposicao). */
 void app_trocar_amp(void);
 int app_amp_atual(void);
+void app_amp_ir_para(int i);
 
 /* Estado dos 8 loops. */
 bool palco_loop_ligado(int i);

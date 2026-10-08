@@ -137,6 +137,17 @@ void app_trocar_amp(void)
     ESP_LOGI(TAG, "amp: %s", amp_nome[amp_atual]);
 }
 
+/* vai direto ao amp i (0..2) sem loop: um unico arranjo, sem panic de boot */
+void app_amp_ir_para(int i)
+{
+    if (i < 0 || i >= QTD_AMPS) i = 0;
+    if (amp_atual != i) {
+        amp_atual = i;
+        arranjar_carrossel();
+        ESP_LOGI(TAG, "amp -> %s", amp_nome[amp_atual]);
+    }
+}
+
 int app_amp_atual(void)   /* amp em destaque agora (0..2) */
 {
     return amp_atual;

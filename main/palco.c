@@ -10,6 +10,7 @@
 #include "bsp/esp-bsp.h"
 #include "video_loop.h"
 #include "sd_fundos.h"
+#include "web_server.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include <stdio.h>
@@ -497,7 +498,7 @@ static const submenu_t menus[] = {
     { LV_SYMBOL_SAVE,      "PRESETS", { "Renomear", "Salvar", "Carregar", "Duplicar", NULL, NULL } },
     { LV_SYMBOL_SHUFFLE,   "PEDAIS",  { NULL, NULL, NULL, NULL, NULL, NULL } },   /* gerado: 8 loops */
     { LV_SYMBOL_AUDIO,     "AMP",     { "Canal 1", "Canal 2", "Canal 3", "Boost", "Trocar Amp", NULL } },
-    { LV_SYMBOL_WIFI,      "REDE",    { "WiFi", "ESP-NOW", "Pareamento", "Status", NULL, NULL } },
+    { LV_SYMBOL_WIFI,      "REDE",    { "WiFi", "Web: off", "ESP-NOW", "Pareamento", "Status", NULL } },
     { LV_SYMBOL_IMAGE,     "SKIN",    { "Vid: lento", "Vid: normal", "Vid: rapido", "Fundo SD 1", "Fundo SD 2", "Fundo: video", NULL } },
     { LV_SYMBOL_SETTINGS,  "SISTEMA", { "Menu: abaixo", "Menu: esquerda", "Cor das letras", "Estilo das letras", "Brilho", NULL } },
     { LV_SYMBOL_VOLUME_MAX, "MIDI",    { "Canal MIDI", "Clock Sync", "Scenes", NULL, NULL, NULL } },
@@ -520,9 +521,9 @@ static lv_obj_t *btn_canal[4];
 #define QTD_MENUS (sizeof(menus) / sizeof(menus[0]))
 
 /* ---- pedais estilo web: strip 2 slots + imagens reais ---- */
-extern const lv_img_dsc_t img_pedal_od;     /* overdrive 300x200 RGBA */
-extern const lv_img_dsc_t img_pedal_ch;     /* chorus 300x200 RGBA */
-extern const lv_img_dsc_t img_pedal_dl;     /* delay 300x200 RGBA */
+extern const lv_img_dsc_t img_pedal_od;     /* overdrive 192x128 */
+extern const lv_img_dsc_t img_pedal_ch;     /* chorus 192x128 */
+extern const lv_img_dsc_t img_pedal_dl;     /* delay 192x128 */
 
 typedef struct { const char *nome; const lv_img_dsc_t *img; } pedal_web_t;
 static const pedal_web_t pedais_web[] = {
@@ -533,6 +534,14 @@ static const pedal_web_t pedais_web[] = {
 #define QTD_PEDAIS_WEB (sizeof(pedais_web) / sizeof(pedais_web[0]))
 
 #define SLOT_COUNT 8                            /* igual web: faixa de 8 slots */
+static void ev_pedal_slot(lv_event_t *e);
+static int pedais_colocar_em_slot(int p, int pos);
+static void ev_qtd_pedais(lv_event_t *e);
+static int qtd_pedais_alvo = 8;   /* quantos pedais devem ficar na base */
+static lv_obj_t *lbl_qtd_pedais = NULL;
+static bool   modo_stop    = false;      /* modo apresentacao: pedal toggla liga/desliga */
+static bool   pedal_ligado[SLOT_COUNT];  /* estado do efeito por pedal no modo stop */
+static void ev_stop(lv_event_t *e);
 static lv_obj_t *slot_web[SLOT_COUNT];          /* containers na base da tela */
 static lv_obj_t *pedal_obj[SLOT_COUNT];         /* pedal dentro do slot (ou NULL) */
 static const pedal_web_t *pedal_em_slot[SLOT_COUNT];
@@ -605,7 +614,7 @@ static void banco_aplicar(void)
     if (cb_nome) cb_nome(preset_nome);
 
     int alvo = banco_amp[b] % 3;
-    while (app_amp_atual() != alvo) app_trocar_amp();
+    app_amp_ir_para(alvo);
 
     for (int p = 0; p < (int)QTD_PEDAIS_WEB; p++) {
         bool quer = banco_pedais[b][p];
@@ -620,7 +629,10 @@ static void banco_aplicar(void)
                 lv_obj_t *im = lv_img_create(slot_web[i]);
                 lv_img_set_src(im, pedais_web[p].img);
                 lv_obj_center(im);
-                lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_clear_flag(im, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_add_flag(im, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_add_event_cb(im, ev_pedal_slot, LV_EVENT_ALL, (void *)(intptr_t)i);
+                lv_obj_set_ext_click_area(im, 4);
                 pedal_obj[i] = im;
                 pedal_em_slot[i] = &pedais_web[p];
                 break;
@@ -749,7 +761,7 @@ static void ev_banco_amp(lv_event_t *e)
     /* reflete na tela so se este banco estiver ativo */
     if (b == banco_ativo) {
         int alvo = banco_amp[b];
-        while (app_amp_atual() != alvo) app_trocar_amp();
+        app_amp_ir_para(alvo);
     }
     lv_obj_t *row = lv_event_get_target(e);
     lv_obj_t *lv_ = lv_obj_get_child(row, 1);   /* label '->' a direita */
@@ -798,7 +810,10 @@ static void ev_pedal_check(lv_event_t *e)
         lv_obj_t *im = lv_img_create(slot_web[i]);
         lv_img_set_src(im, pedais_web[p].img);
         lv_obj_center(im);
-        lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(im, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(im, ev_pedal_slot, LV_EVENT_ALL, (void *)(intptr_t)i);
+        lv_obj_set_ext_click_area(im, 4);
         pedal_obj[i] = im;
         pedal_em_slot[i] = &pedais_web[p];
         toggle_web_set(pedal_check[p], true);
@@ -808,26 +823,193 @@ static void ev_pedal_check(lv_event_t *e)
     ESP_LOGI(TAG, "slots cheios");
 }
 
-/* tap no slot da base = remove o pedal (igual web) */
+/* ---- arrastar pedais entre slots (touch) ----
+ * PRESSED no slot com pedal: guarda origem. PRESSING: move a imagem com o dedo
+ * (re-parent para o grupo_ui para poder atravessar slots). RELEASED: solta no
+ * slot sob o dedo (troca com o que estiver la) ou volta se nenhum.
+ * Toque curto (sem arrastar) = remove o pedal. */
+static int  arrastar_origem = -1;
+static bool arrastar_moveu  = false;
+static lv_obj_t *arrastar_img = NULL;
+static lv_point_t arrastar_inicio = {0, 0};
+
 static void ev_pedal_slot(lv_event_t *e)
 {
+    lv_event_code_t c = lv_event_get_code(e);
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     if (i < 0 || i >= SLOT_COUNT) return;
-    if (pedal_obj[i]) {
-        /* desliga o checkbox do pedal removido */
-        for (int p = 0; p < (int)QTD_PEDAIS_WEB; p++) {
-            if (pedal_em_slot[i] == &pedais_web[p] && pedal_check[p]) {
-                toggle_web_set(pedal_check[p], false);
-            }
+
+    if (c == LV_EVENT_PRESSED) {
+        if (!pedal_obj[i]) return;
+        arrastar_origem = i;
+        arrastar_moveu = false;
+        arrastar_img = pedal_obj[i];
+        lv_indev_t *in = lv_indev_get_act();
+        if (in) lv_indev_get_point(in, &arrastar_inicio);
+        return;
+    }
+    if (c == LV_EVENT_PRESSING) {
+        if (arrastar_origem < 0 || !arrastar_img) return;
+        lv_indev_t *in = lv_indev_get_act();
+        if (!in) return;
+        lv_point_t p;
+        lv_indev_get_point(in, &p);
+        /* so vira arrasto apos mover >18px (toque curto continua = remover) */
+        lv_coord_t dx = p.x - arrastar_inicio.x;
+        lv_coord_t dy = p.y - arrastar_inicio.y;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        if (dx + dy < 18) return;
+        if (!arrastar_moveu) {
+            arrastar_moveu = true;
+            lv_obj_set_parent(arrastar_img, lv_scr_act());
+            lv_obj_add_flag(arrastar_img, LV_OBJ_FLAG_CLICKABLE);
         }
-        lv_obj_del(pedal_obj[i]);
-        pedal_obj[i] = NULL;
-        pedal_em_slot[i] = NULL;
-        ESP_LOGI(TAG, "pedal removido do slot %d", i);
+        lv_obj_set_pos(arrastar_img, p.x - 96, p.y - 64);
+        return;
+    }
+    if (c == LV_EVENT_RELEASED) {
+        if (arrastar_origem < 0 || !arrastar_img) { arrastar_origem = -1; return; }
+        int origem = arrastar_origem;
+        arrastar_origem = -1;
+        lv_obj_t *im = arrastar_img;
+        arrastar_img = NULL;
+
+        if (!arrastar_moveu) {
+            arrastar_moveu = false;
+            if (modo_stop) {
+                /* modo STOP: alterna liga/desliga do efeito (acende/esmaece) */
+                if (pedal_obj[origem]) {
+                    pedal_ligado[origem] = !pedal_ligado[origem];
+                    lv_obj_set_style_opa(pedal_obj[origem],
+                        pedal_ligado[origem] ? LV_OPA_COVER : LV_OPA_30, LV_PART_MAIN);
+                    ESP_LOGI(TAG, "pedal slot %d -> %s",
+                             origem, pedal_ligado[origem]?"ON":"OFF");
+                }
+            } else if (pedal_obj[origem]) {
+                for (int p = 0; p < (int)QTD_PEDAIS_WEB; p++)
+                    if (pedal_em_slot[origem] == &pedais_web[p] && pedal_check[p])
+                        toggle_web_set(pedal_check[p], false);
+                lv_obj_del(pedal_obj[origem]);
+                pedal_obj[origem] = NULL;
+                pedal_em_slot[origem] = NULL;
+                ESP_LOGI(TAG, "pedal removido do slot %d", origem);
+            }
+            return;
+        }
+
+        /* arrastou: acha o slot sob o dedo */
+        lv_indev_t *in = lv_indev_get_act();
+        lv_point_t p;
+        if (in) lv_indev_get_point(in, &p);
+        int alvo = -1;
+        for (int s = 0; s < SLOT_COUNT; s++) {
+            lv_area_t a;
+            lv_obj_get_coords(slot_web[s], &a);
+            if (p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2) { alvo = s; break; }
+        }
+        arrastar_moveu = false;
+        if (alvo >= 0 && alvo != origem) {
+            const pedal_web_t *orig_ped = pedal_em_slot[origem];
+            if (pedal_obj[alvo]) {
+                lv_obj_t *tmp = pedal_obj[alvo];
+                const pedal_web_t *tmp_ped = pedal_em_slot[alvo];
+                lv_obj_set_parent(tmp, slot_web[origem]);
+                lv_obj_center(tmp);
+                lv_obj_clear_flag(tmp, LV_OBJ_FLAG_CLICKABLE);
+                pedal_obj[origem] = tmp;
+                pedal_em_slot[origem] = tmp_ped;
+            } else {
+                pedal_obj[origem] = NULL;
+                pedal_em_slot[origem] = NULL;
+            }
+            lv_obj_set_parent(im, slot_web[alvo]);
+            lv_obj_center(im);
+            lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
+            pedal_obj[alvo] = im;
+            pedal_em_slot[alvo] = orig_ped;
+            ESP_LOGI(TAG, "pedal movido slot %d -> %d", origem, alvo);
+        } else {
+            /* nenhum slot sob o dedo: volta pra origem */
+            lv_obj_set_parent(im, slot_web[origem]);
+            lv_obj_center(im);
+            lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        }
+        return;
+    }
+}
+
+/* preenche os 8 slots com a configuracao do banco (ou padrao ciclando 3 modelos).
+   tap no slot remove; retorna quantos preencheu. */
+static int pedais_colocar_em_slot(int p, int pos)
+{
+    if (pos < 0 || pos >= SLOT_COUNT || pedal_obj[pos]) return -1;
+    lv_obj_t *im = lv_img_create(slot_web[pos]);
+    lv_img_set_src(im, pedais_web[p].img);
+    lv_obj_center(im);
+    lv_obj_clear_flag(im, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(im, LV_OBJ_FLAG_CLICKABLE);   /* alvo do arrasto = a imagem do pedal */
+    lv_obj_add_event_cb(im, ev_pedal_slot, LV_EVENT_ALL, (void *)(intptr_t)pos);
+    lv_obj_set_ext_click_area(im, 4);
+    pedal_obj[pos] = im;
+    pedal_em_slot[pos] = &pedais_web[p];
+    return pos;
+}
+
+/* preenche slots vazios com a config do banco `b`; se o banco nao define
+   pedais, usa o padrao (cicla os 3 modelos pelos 8 slots = 2 opcoes). */
+static void pedais_aplicar_padrao(int b)
+{
+    /* primeiro libera o que estiver marcado como removido */
+    int cheios = 0;
+    for (int i = 0; i < SLOT_COUNT; i++)
+        if (pedal_em_slot[i]) cheios++;
+
+    if (cheios < SLOT_COUNT) {
+        /* completa com os pedais do banco; se este nao os define, ciclo */
+        int base = 0;
+        int qt = (int)QTD_PEDAIS_WEB;
+        if (qt == 0) return;
+        for (int i = 0; i < SLOT_COUNT; i++) {
+            if (pedal_obj[i]) continue;
+            /* pedais do banco? usa ordem fixa ciclica */
+            int p = (base++) % qt;
+            pedais_colocar_em_slot(p, i);
+        }
     }
 }
 
 static void ev_pedal_check(lv_event_t *e);   /* prototipo: toggle no painel */
+
+/* contador de QUANTOS pedais ficam na base (menu PEDAIS) */
+static void ev_qtd_pedais(lv_event_t *e)
+{
+    int d = (int)(intptr_t)lv_event_get_user_data(e);
+    int novo = qtd_pedais_alvo + d;
+    if (novo < 1) novo = 1;
+    if (novo > SLOT_COUNT) novo = SLOT_COUNT;
+    if (novo == qtd_pedais_alvo) return;
+    qtd_pedais_alvo = novo;
+
+    /* garante ao menos `novo` slots preenchidos; remove os alem de `novo`
+       (mantem os que ja estao, so ajusta a quantidade) */
+    for (int i = 0; i < SLOT_COUNT; i++) {
+        if (i < qtd_pedais_alvo && !pedal_obj[i]) {
+            pedais_colocar_em_slot(i % (int)QTD_PEDAIS_WEB, i);
+        } else if (i >= qtd_pedais_alvo && pedal_obj[i]) {
+            const pedal_web_t *pf = pedal_em_slot[i];
+            static lv_obj_t *tmp_del; tmp_del = pedal_obj[i];
+            lv_obj_del_async(tmp_del);
+            pedal_obj[i] = NULL;
+            pedal_em_slot[i] = NULL;
+        }
+    }
+    if (lbl_qtd_pedais) {
+        char b[8]; snprintf(b, sizeof(b), "%d", qtd_pedais_alvo);
+        lv_label_set_text(lbl_qtd_pedais, b);
+    }
+    ESP_LOGI(TAG, "qtd pedais -> %d", qtd_pedais_alvo);
+}
 
 /* prototipos: ev_item usa estas antes das definicoes */
 static void fechar_submenu(void);
@@ -907,6 +1089,20 @@ static void ev_item(lv_event_t *e)
         abrir_estilos();
         return;
     }
+    if (strncmp(nome, "Web:", 4) == 0) {
+        bool ligar = (strcmp(nome, "Web: on") != 0);   /* 'off' -> liga */
+        esp_err_t e = web_server_enable(ligar);
+        ESP_LOGI(TAG, "web %s (%s)", ligar?"ligada":"desligada", esp_err_to_name(e));
+        fechar_submenu();
+        return;
+    }
+    if (strcmp(nome, "WiFi") == 0) {
+        /* alterna o AP off/on */
+        palco_set_wifi(!wifi_ok);
+        ESP_LOGI(TAG, "wifi -> %s", wifi_ok?"on":"off");
+        fechar_submenu();
+        return;
+    }
     if (strcmp(nome, "Salvar") == 0) {
         salvar_preset();
         fechar_submenu();
@@ -976,7 +1172,7 @@ static void abrir_submenu(int idx)
 
     const int larg = 320;
     int alt;
-    if (idx == MENU_PEDAIS)      alt = 78 + (int)QTD_PEDAIS_WEB * 36 + 8 * 34;
+    if (idx == MENU_PEDAIS)      alt = 78 + 26 + (int)QTD_PEDAIS_WEB * 30 + 8 * 24;
     else if (idx == MENU_SKIN)   alt = 54 + n * 34 + 56;
     else if (idx == MENU_PRESETS) alt = 54 + n * 34 + 44 + 36 + 40;
     else                         alt = 54 + n * 34 + 48;
@@ -1016,14 +1212,27 @@ static void abrir_submenu(int idx)
     lv_obj_set_style_bg_opa(regua, LV_OPA_COVER, LV_PART_MAIN);
 
     if (idx == MENU_PEDAIS) {
+        /* contador de QUANTOS pedais ficam na base (antes dos tipos) */
+        lv_obj_t *lab_q = texto(painel_menu, "PEDAIS NA BASE", &fonte_cinzel_16, WEB_OURO_CLARO);
+        lv_obj_set_pos(lab_q, 16, 58);
+        lv_obj_t *b_menos = btn_mweb(painel_menu, "-", &fonte_cinzel_22, 38, 28);
+        lv_obj_set_pos(b_menos, 16 + 150, 54);
+        lv_obj_add_event_cb(b_menos, ev_qtd_pedais, LV_EVENT_CLICKED, (void *)(intptr_t)-1);
+        lv_obj_t *b_mais  = btn_mweb(painel_menu, "+", &fonte_cinzel_22, 38, 28);
+        lv_obj_set_pos(b_mais, 16 + 150 + 44, 54);
+        lv_obj_add_event_cb(b_mais, ev_qtd_pedais, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+        char cb[8]; snprintf(cb, sizeof(cb), "%d", qtd_pedais_alvo);
+        lbl_qtd_pedais = texto(painel_menu, cb, &fonte_cinzel_22, WEB_OURO);
+        lv_obj_set_pos(lbl_qtd_pedais, 16 + 150 + 22, 55);
+
         /* checkboxes estilo web (add/remove da base) */
         for (int p = 0; p < (int)QTD_PEDAIS_WEB; p++) {
-            lv_obj_t *it = item_web(painel_menu, 54 + p * 36, larg - 28,
+            lv_obj_t *it = item_web(painel_menu, 54 + 26 + p * 30, larg - 28,
                                     pedais_web[p].nome, NULL);
             lv_obj_add_event_cb(it, ev_pedal_check, LV_EVENT_CLICKED,
                                 (void *)(intptr_t)p);
             lv_obj_t *tg = toggle_web(painel_menu,
-                                      16 + larg - 28 - 44 - 8, 54 + p * 36 + 7,
+                                      16 + larg - 28 - 44 - 8, 80 + p * 30 + 7,
                                       pedal_em_slot[0] == &pedais_web[p] ||
                                       pedal_em_slot[1] == &pedais_web[p]);
             pedal_check[p] = tg;
@@ -1036,7 +1245,7 @@ static void abrir_submenu(int idx)
         /* loops 1-8 com LED (comportamento nativo preservado) */
         for (int i = 0; i < 8; i++) {
             lv_obj_t *it = item_web(painel_menu,
-                                    54 + (int)QTD_PEDAIS_WEB * 36 + i * 34,
+                                    80 + (int)QTD_PEDAIS_WEB * 30 + i * 24,
                                     larg - 28, nome_loop[i], NULL);
             lv_obj_add_event_cb(it, ev_loop, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
@@ -1272,6 +1481,22 @@ static void ev_menu(lv_event_t *e)
 
 /* ---- engrenagem: alterna interface / cenario limpo ---- */
 
+/* modo STOP: esmaece a tela (backlight baixo) e o toque no pedal liga/desliga
+   o efeito; segundo toque no botao STOP sai. */
+static void ev_stop(lv_event_t *e)
+{
+    modo_stop = !modo_stop;
+    if (modo_stop) {
+        fechar_submenu();                    /* menus somem: tela limpa */
+        if (grupo_ui) lv_obj_add_flag(grupo_ui, LV_OBJ_FLAG_HIDDEN);
+        bsp_display_brightness_set(18);      /* escurece/esmaece */
+        ESP_LOGI(TAG, "STOP on (tela esmaecida)");
+    } else {
+        bsp_display_brightness_set(100);
+        ESP_LOGI(TAG, "STOP off");
+    }
+}
+
 static void ev_engrenagem(lv_event_t *e)
 {
     ui_visivel = !ui_visivel;
@@ -1385,16 +1610,18 @@ void palco_montar(lv_obj_t *tela)
 
     /* strip de pedais estilo web: 8 slots na base da tela */
     for (int s = 0; s < SLOT_COUNT; s++) {
-        lv_obj_t *sl = lv_obj_create(grupo_ui);
+        lv_obj_t *sl = lv_obj_create(tela);   /* na raiz: permanece ao ocultar menus */
         lv_obj_remove_style_all(sl);
-        lv_obj_set_size(sl, 196, 132);
-        lv_obj_set_pos(sl, 4 + s * 99, 480 - 132);
+        lv_obj_set_size(sl, 192, 132);
+        /* strip alinhado a ESQUERDA; pitch 86 => ultimo termina em 602+192=794<800 (sem corte) */
+        lv_obj_set_pos(sl, 0 + s * 86, 480 - 132);
         lv_obj_set_style_radius(sl, 10, LV_PART_MAIN);
         /* slot transparente (igual web .pedal-slot border:none, sem fundo) */
         lv_obj_set_style_bg_opa(sl, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_add_flag(sl, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_clear_flag(sl, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_event_cb(sl, ev_pedal_slot, LV_EVENT_CLICKED, (void *)(intptr_t)s);
+        /* handler de arrasto fica na IMAGEM do pedal (ev_pedal_slot), nao aqui,
+           senao o evento borbulha e o handler roda 2x (slot + imagem) */
         slot_web[s] = sl;
     }
 
@@ -1403,6 +1630,7 @@ void palco_montar(lv_obj_t *tela)
     /* bancos NVS: carrega o salvo e aplica o ativo (nome/amp/pedais) */
     bancos_carregar();
     banco_aplicar();
+    pedais_aplicar_padrao(banco_ativo);     /* preenche slots vazios por padrao */
 
     ESP_LOGI(TAG, "palco montado: %d menus", (int)QTD_MENUS);
 }
