@@ -1,10 +1,11 @@
 idf_component_register(
-    REQUIRES spiffs esp_driver_jpeg fatfs esp_driver_sdmmc nvs_flash esp_netif esp_wifi esp_wifi_remote esp_http_server
+    REQUIRES spiffs esp_driver_jpeg fatfs esp_driver_sdmmc nvs_flash esp_netif esp_wifi esp_wifi_remote esp_hosted esp_http_server
     SRCS
         "app_main.c"
         "video_loop.c"
         "palco.c"
         "sd_fundos.c"
+        "c6_ota.c"
         "fonte_cinzel_16.c"
         "fonte_cinzel_20.c"
         "fonte_cinzel_22.c"
@@ -31,11 +32,14 @@ idf_component_register(
         "pedal_ch_img.c"
         "pedal_dl_img.c"
         "wifi.c"
+        "esp_now_tx.c"
         "web_server.c"
         "../src/bsp_display.c"
         "../src/bsp_touch.c"
         "../src/bsp_i2c.c"
         "../src/jc4880p433c_bsp.c"
+    EMBED_FILES
+        "c6_fw.bin"
     INCLUDE_DIRS
         "."
         "../include"

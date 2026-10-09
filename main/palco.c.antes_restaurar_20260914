@@ -1,0 +1,646 @@
+/* palco.c - tela principal estilo tablet steampunk sobre o cenario OLDSKULL.
+ * Layout mapeado sobre a imagem de fundo (800x480):
+ *   banner OLDSKULL  y  10..90    -> nome do preset
+ *   medidores        y 145, x445/555 (r=50)
+ *   plataforma livre y 260..440   -> menus e submenus
+ *   laterais         x 0..100 e 700..800 -> botoes
+ */
+
+#include "palco.h"
+#include "bsp/esp-bsp.h"
+#include "video_loop.h"
+#include "sd_fundos.h"
+#include "esp_log.h"
+#include "lvgl.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+static const char *TAG = "palco";
+
+/* ---- paleta steampunk (latao, cobre, ambar) ---- */
+#define OURO_CLARO  0xF3C969   /* texto principal */
+#define OURO        0xC9922B   /* bordas, molduras */
+#define OURO_ESCURO 0x8A6420   /* detalhes, sombra */
+#define FUNDO_PAN   0x120C06   /* painel translucido */
+#define VERDE_LED   0x4CD964   /* status conectado */
+#define VERMELHO    0xE04A3F   /* status desconectado */
+#define AMBAR       0xFFA030   /* destaque ativo */
+
+/* nome do preset compartilhado com o resto do app */
+static char  preset_nome[24] = "PRESET";
+static bool  wifi_ok = false;
+
+static lv_obj_t *lbl_preset  = NULL;
+static lv_obj_t *lbl_wifi    = NULL;
+static lv_obj_t *led_wifi    = NULL;
+static lv_obj_t *painel_menu = NULL;
+static lv_obj_t *teclado_box = NULL;
+static lv_obj_t *ta_nome     = NULL;
+
+/* grupo com toda a interface: a engrenagem mostra/oculta para deixar o
+ * cenario limpo, sem destruir os objetos. */
+static lv_obj_t *grupo_ui    = NULL;
+static bool      ui_visivel  = true;
+
+/* fontes vitorianas: Cinzel (romana classica) nos menus,
+ * Playfair Display (didone sec. XIX) no nome do preset */
+LV_FONT_DECLARE(fonte_cinzel_16);
+LV_FONT_DECLARE(fonte_cinzel_20);
+LV_FONT_DECLARE(fonte_cinzel_22);
+LV_FONT_DECLARE(fonte_cinzel_26);
+LV_FONT_DECLARE(fonte_playfair_30);
+LV_FONT_DECLARE(fonte_playfair_40);
+/* versoes Black (mais gordinhas) usadas na interface */
+LV_FONT_DECLARE(fonte_preset_42);
+LV_FONT_DECLARE(fonte_menu_22);
+LV_FONT_DECLARE(fonte_menu_26);
+/* trio selecionavel em SISTEMA -> Estilo das letras */
+LV_FONT_DECLARE(fonte_manu_48);     /* Italianno manuscrita */
+LV_FONT_DECLARE(fonte_manu_28);
+LV_FONT_DECLARE(fonte_play_42);     /* Playfair Display */
+LV_FONT_DECLARE(fonte_play_24);
+LV_FONT_DECLARE(fonte_cinz_40);     /* Cinzel */
+
+/* estilos de letra disponiveis: um par (titulo grande, item de menu) */
+typedef struct {
+    const char      *nome;
+    const lv_font_t *grande;     /* nome do preset */
+    const lv_font_t *media;      /* titulos e itens de submenu */
+} estilo_letra_t;
+
+static const estilo_letra_t estilos[] = {
+    { "Manuscrita", &fonte_manu_48,   &fonte_manu_28  },
+    { "Playfair",   &fonte_play_42,   &fonte_play_24  },
+    { "Cinzel",     &fonte_cinz_40,   &fonte_menu_22  },
+    { "Robusta",    &fonte_preset_42, &fonte_menu_22  },
+};
+#define QTD_ESTILOS (sizeof(estilos) / sizeof(estilos[0]))
+static int estilo_atual = 3;        /* comeca na Robusta (peso que agradou) */
+
+/* cores de fundo da barra do preset conforme o canal do amp.
+ * Tons saturados: a barra usa opacidade alta para a cor aparecer. */
+static const uint32_t cor_canal[4] = {
+    0x1F7A34,   /* canal 1: verde vivo */
+    0xB8901A,   /* canal 2: amarelo dourado */
+    0xA82418,   /* canal 3: vermelho forte */
+    0x7A3FA8,   /* boost:   lilas */
+};
+
+static uint32_t cor_atual = 0xF3C969;   /* cor das letras, escolhida em SISTEMA */
+
+/* ---- helpers de estilo ---- */
+
+static void estilo_painel(lv_obj_t *o)
+{
+    lv_obj_set_style_bg_color(o, lv_color_hex(FUNDO_PAN), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(o, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_border_width(o, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(o, lv_color_hex(OURO), LV_PART_MAIN);
+    lv_obj_set_style_border_opa(o, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_set_style_radius(o, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+}
+
+static lv_obj_t *texto(lv_obj_t *pai, const char *txt,
+                       const lv_font_t *fonte, uint32_t cor)
+{
+    lv_obj_t *l = lv_label_create(pai);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, fonte, LV_PART_MAIN);
+    lv_obj_set_style_text_color(l, lv_color_hex(cor), LV_PART_MAIN);
+    return l;
+}
+
+/* ---- barra de status: WiFi + preset ---- */
+
+/* pulso discreto do LED (reservado: animacao de sombra pesa no refresh) */
+__attribute__((unused))
+static void anim_pulso(void *obj, int32_t v)
+{
+    lv_obj_set_style_shadow_opa((lv_obj_t *)obj, (lv_opa_t)v, LV_PART_MAIN);
+}
+
+__attribute__((unused))
+static void iniciar_pulso(lv_obj_t *led)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, led);
+    lv_anim_set_exec_cb(&a, anim_pulso);
+    lv_anim_set_values(&a, LV_OPA_30, LV_OPA_70);   /* sutil, sem exagero */
+    lv_anim_set_time(&a, 1300);
+    lv_anim_set_playback_time(&a, 1300);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+void palco_set_wifi(bool conectado)
+{
+    wifi_ok = conectado;
+    if (led_wifi) {
+        lv_obj_set_style_bg_color(led_wifi,
+            lv_color_hex(conectado ? VERDE_LED : VERMELHO), LV_PART_MAIN);
+        lv_obj_set_style_shadow_color(led_wifi,
+            lv_color_hex(conectado ? VERDE_LED : VERMELHO), LV_PART_MAIN);
+    }
+    if (lbl_wifi) {
+        lv_label_set_text(lbl_wifi, conectado ? "ONLINE" : "OFFLINE");
+        lv_obj_set_style_text_color(lbl_wifi,
+            lv_color_hex(conectado ? VERDE_LED : VERMELHO), LV_PART_MAIN);
+    }
+}
+
+const char *palco_get_preset(void)
+{
+    return preset_nome;
+}
+
+/* ---- estado dos loops, compartilhado com a tela 1 ---- */
+
+static bool loop_ligado[8] = { false };
+static void (*cb_sync)(int, bool) = NULL;
+static void (*cb_nome)(const char *) = NULL;
+static void (*cb_cor)(uint32_t) = NULL;
+static void (*cb_canal)(uint32_t) = NULL;
+static void (*cb_fonte)(const lv_font_t *) = NULL;
+
+void palco_registrar_fonte(void (*cb)(const lv_font_t *))
+{
+    cb_fonte = cb;
+    if (cb_fonte) cb_fonte(estilos[estilo_atual].grande);
+}
+
+void palco_registrar_cor(void (*cb)(uint32_t))
+{
+    cb_cor = cb;
+    if (cb_cor) cb_cor(cor_atual);
+}
+
+void palco_registrar_canal(void (*cb)(uint32_t))
+{
+    cb_canal = cb;
+    if (cb_canal) cb_canal(cor_canal[0]);
+}
+
+void palco_registrar_nome(void (*cb)(const char *))
+{
+    cb_nome = cb;
+    if (cb_nome) cb_nome(preset_nome);
+}
+
+void palco_registrar_sync(void (*cb)(int, bool))
+{
+    cb_sync = cb;
+    for (int i = 0; i < 8; i++) {
+        if (cb_sync) cb_sync(i, loop_ligado[i]);
+    }
+}
+
+bool palco_loop_ligado(int i)
+{
+    return (i >= 0 && i < 8) ? loop_ligado[i] : false;
+}
+
+void palco_toggle_loop(int i)
+{
+    if (i < 0 || i >= 8) return;
+    loop_ligado[i] = !loop_ligado[i];
+    ESP_LOGI(TAG, "loop %d -> %s", i + 1, loop_ligado[i] ? "ON" : "OFF");
+    if (cb_sync) cb_sync(i, loop_ligado[i]);   /* acende/apaga na tela 1 */
+}
+
+/* ---- teclado: escreve o nome do preset ---- */
+
+static void fechar_teclado(void)
+{
+    if (teclado_box) {
+        lv_obj_del(teclado_box);
+        teclado_box = NULL;
+        ta_nome = NULL;
+    }
+}
+
+static void ev_teclado(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_READY) {            /* OK: salva */
+        const char *t = lv_textarea_get_text(ta_nome);
+        if (t && t[0]) {
+            strncpy(preset_nome, t, sizeof(preset_nome) - 1);
+            preset_nome[sizeof(preset_nome) - 1] = '\0';
+            if (lbl_preset) lv_label_set_text(lbl_preset, preset_nome);
+            if (cb_nome) cb_nome(preset_nome);      /* propaga para a tela 1 */
+            ESP_LOGI(TAG, "preset salvo: %s", preset_nome);
+        }
+        fechar_teclado();
+    } else if (code == LV_EVENT_CANCEL) {
+        fechar_teclado();
+    }
+}
+
+static void abrir_teclado(lv_event_t *e)
+{
+    if (teclado_box) return;
+
+    teclado_box = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(teclado_box);
+    lv_obj_set_size(teclado_box, 800, 480);
+    lv_obj_set_pos(teclado_box, 0, 0);
+    lv_obj_set_style_bg_color(teclado_box, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(teclado_box, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_clear_flag(teclado_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *titulo = texto(teclado_box, "NOME DO PRESET",
+                             &fonte_menu_22, OURO);
+    lv_obj_set_style_text_letter_space(titulo, 3, LV_PART_MAIN);
+    lv_obj_align(titulo, LV_ALIGN_TOP_MID, 0, 8);
+
+    ta_nome = lv_textarea_create(teclado_box);
+    lv_textarea_set_one_line(ta_nome, true);
+    lv_textarea_set_max_length(ta_nome, sizeof(preset_nome) - 1);
+    lv_textarea_set_text(ta_nome, preset_nome);
+    lv_obj_set_size(ta_nome, 520, 50);
+    lv_obj_align(ta_nome, LV_ALIGN_TOP_MID, 0, 38);
+    lv_obj_set_style_bg_color(ta_nome, lv_color_hex(0x151008), LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta_nome, lv_color_hex(OURO), LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta_nome, 2, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta_nome, lv_color_hex(OURO_CLARO), LV_PART_MAIN);
+    lv_obj_set_style_text_font(ta_nome, &lv_font_montserrat_28, LV_PART_MAIN);
+
+    lv_obj_t *kb = lv_keyboard_create(teclado_box);
+    lv_obj_set_size(kb, 800, 372);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_UPPER);
+    lv_keyboard_set_textarea(kb, ta_nome);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(0x0E0A04), LV_PART_MAIN);
+    lv_obj_set_style_text_color(kb, lv_color_hex(OURO_CLARO), LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(0x241A0A), LV_PART_ITEMS);
+    lv_obj_set_style_border_color(kb, lv_color_hex(OURO_ESCURO), LV_PART_ITEMS);
+    lv_obj_set_style_border_width(kb, 1, LV_PART_ITEMS);
+    lv_obj_add_event_cb(kb, ev_teclado, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, ev_teclado, LV_EVENT_CANCEL, NULL);
+}
+
+/* === SISTEMA DE MENUS PROFISSIONAL === */
+
+/* --- Forward declarations (necessário porque handlers são usados antes da definição) --- */
+static void velocidade_handler(lv_event_t *e);
+static void modo_stomp_handler(lv_event_t *e);
+static void modo_preset_handler(lv_event_t *e);
+static void fechar_overlay_handler(lv_event_t *e);
+static void abrir_teclado_popup(void);
+static void ev_teclado_handler(lv_event_t *e);
+static void fechar_teclado_local(void);
+static void criar_submenu_sistema(lv_obj_t *scr);
+static void criar_submenu_implementacao(lv_obj_t *scr);
+
+/* --- Estados --- */
+static int velocidade_atual = 24;    /* FPS normal */
+static char nome_preset[24] = "PRESET";
+
+/* --- Botão circular com efeito de glow (estilo pedaleira pro) */
+static lv_obj_t *criar_botao_circular(lv_obj_t *pai, const char *txt,
+                                      lv_align_t align, int32_t x, int32_t y,
+                                      lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_t *btn = lv_btn_create(pai);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, 84, 84);
+    lv_obj_align(btn, align, x, y);
+
+    /* Glow effect */
+    static lv_style_t style_btn;
+    lv_style_init(&style_btn);
+    lv_style_set_bg_color(&style_btn, lv_color_hex(0x2A1E08));
+    lv_style_set_bg_opa(&style_btn, LV_OPA_90);
+    lv_style_set_border_width(&style_btn, 2);
+    lv_style_set_border_color(&style_btn, lv_color_hex(OURO));
+    lv_style_set_border_opa(&style_btn, LV_OPA_80);
+    lv_style_set_radius(&style_btn, 42);
+    lv_style_set_pad_all(&style_btn, 0);
+    lv_obj_add_style(btn, &style_btn, 0);
+
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
+
+    /* Label */
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, txt);
+    lv_obj_set_style_text_font(lbl, &fonte_menu_22, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(OURO_CLARO), LV_PART_MAIN);
+    lv_obj_center(lbl);
+
+    return btn;
+}
+
+/* --- Overlay escuro (semi-transparente) para submenus --- */
+static lv_obj_t *criar_overlay_menu(lv_obj_t *pai)
+{
+    lv_obj_t *ov = lv_obj_create(pai);
+    lv_obj_remove_style_all(ov);
+    lv_obj_set_size(ov, 800, 480);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_color(ov, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_move_background(ov);
+    return ov;
+}
+
+/* --- Handlers de cada módulo --- */
+static void menu_nome_handler(lv_event_t *e) {
+    /* Abre teclado */
+    if (!teclado_box) abrir_teclado_popup();
+}
+
+static void menu_sistema_handler(lv_event_t *e) {
+    criar_submenu_sistema(lv_scr_act());
+}
+
+static void menu_midi_handler(lv_event_t *e) {
+    /* Placeholder - ainda não implementado */
+    ESP_LOGI(TAG, "MIDI: em desenvolvimento");
+}
+
+static void menu_implementacao_handler(lv_event_t *e) {
+    criar_submenu_implementacao(lv_scr_act());
+}
+
+/* --- Submenu: SISTEMA (velocidade video + fonte + cor) --- */
+static void criar_submenu_sistema(lv_obj_t *scr)
+{
+    lv_obj_t *ov = criar_overlay_menu(scr);
+
+    lv_obj_t *panel = lv_obj_create(scr);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_size(panel, 460, 320);
+    lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x0E0A04), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(panel, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(panel, lv_color_hex(OURO), LV_PART_MAIN);
+    lv_obj_set_style_radius(panel, 10, LV_PART_MAIN);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Header */
+    lv_obj_t *hdr = lv_label_create(panel);
+    lv_label_set_text(hdr, "SISTEMA");
+    lv_obj_set_style_text_font(hdr, &fonte_cinz_40, LV_PART_MAIN);
+    lv_obj_set_style_text_color(hdr, lv_color_hex(OURO_CLARO), LV_PART_MAIN);
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 12);
+
+    /* Botões de velocidade do vídeo */
+    lv_obj_t *lbl_v = lv_label_create(panel);
+    lv_label_set_text(lbl_v, "VELOCIDADE VIDEO");
+    lv_obj_set_style_text_font(lbl_v, &fonte_menu_22, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl_v, lv_color_hex(OURO), LV_PART_MAIN);
+    lv_obj_align(lbl_v, LV_ALIGN_LEFT_MID, 20, -40);
+
+    lv_obj_t *btn_05 = lv_btn_create(panel);
+    lv_obj_set_size(btn_05, 72, 36);
+    lv_obj_align(btn_05, LV_ALIGN_LEFT_MID, 110, -40);
+    lv_label_set_text(lv_label_create(btn_05), "0.5x");
+    lv_obj_add_event_cb(btn_05, velocidade_handler, LV_EVENT_CLICKED, (void*)12);
+
+    lv_obj_t *btn_1x = lv_btn_create(panel);
+    lv_obj_set_size(btn_1x, 72, 36);
+    lv_obj_align(btn_1x, LV_ALIGN_LEFT_MID, 230, -40);
+    lv_label_set_text(lv_label_create(btn_1x), "1.0x");
+    lv_obj_add_event_cb(btn_1x, velocidade_handler, LV_EVENT_CLICKED, (void*)24);
+
+    lv_obj_t *btn_2x = lv_btn_create(panel);
+    lv_obj_set_size(btn_2x, 72, 36);
+    lv_obj_align(btn_2x, LV_ALIGN_LEFT_MID, 350, -40);
+    lv_label_set_text(lv_label_create(btn_2x), "2.0x");
+    lv_obj_add_event_cb(btn_2x, velocidade_handler, LV_EVENT_CLICKED, (void*)48);
+
+    /* Botão fechar */
+    lv_obj_t *btn_close = lv_btn_create(panel);
+    lv_obj_align(btn_close, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
+    lv_obj_set_size(btn_close, 60, 36);
+    lv_obj_set_style_bg_color(btn_close, lv_color_hex(0x8A6420), LV_PART_MAIN);
+    lv_obj_set_style_radius(btn_close, 6, LV_PART_MAIN);
+    lv_label_set_text(lv_label_create(btn_close), "FECHAR");
+    lv_obj_add_event_cb(btn_close, fechar_overlay_handler, LV_EVENT_CLICKED, ov);
+}
+
+/* --- Submenu: IMPLEMENTAÇÃO (Stomp / Preset mode) --- */
+static void criar_submenu_implementacao(lv_obj_t *scr)
+{
+    lv_obj_t *ov = criar_overlay_menu(scr);
+
+    lv_obj_t *panel = lv_obj_create(scr);
+    lv_obj_remove_style_all(panel);
+    lv_obj_set_size(panel, 460, 320);
+    lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x0E0A04), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(panel, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(panel, lv_color_hex(OURO), LV_PART_MAIN);
+    lv_obj_set_style_radius(panel, 10, LV_PART_MAIN);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *hdr = lv_label_create(panel);
+    lv_label_set_text(hdr, "IMPLEMENTAÇÃO");
+    lv_obj_set_style_text_font(hdr, &fonte_cinz_40, LV_PART_MAIN);
+    lv_obj_set_style_text_color(hdr, lv_color_hex(OURO_CLARO), LV_PART_MAIN);
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 12);
+
+    /* Modo Stomp */
+    lv_obj_t *lbl_stomp = lv_label_create(panel);
+    lv_label_set_text(lbl_stomp, "MODO STOMP");
+    lv_obj_set_style_text_font(lbl_stomp, &fonte_menu_26, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl_stomp, lv_color_hex(VERDE_LED), LV_PART_MAIN);
+    lv_obj_align(lbl_stomp, LV_ALIGN_LEFT_MID, 20, -40);
+
+    lv_obj_t *btn_stomp_on = lv_btn_create(panel);
+    lv_obj_set_size(btn_stomp_on, 90, 36);
+    lv_obj_align(btn_stomp_on, LV_ALIGN_LEFT_MID, 160, -40);
+    lv_label_set_text(lv_label_create(btn_stomp_on), "ON");
+    lv_obj_add_event_cb(btn_stomp_on, modo_stomp_handler, LV_EVENT_CLICKED, (void*)1);
+
+    lv_obj_t *btn_stomp_off = lv_btn_create(panel);
+    lv_obj_set_size(btn_stomp_off, 90, 36);
+    lv_obj_align(btn_stomp_off, LV_ALIGN_LEFT_MID, 270, -40);
+    lv_label_set_text(lv_label_create(btn_stomp_off), "OFF");
+    lv_obj_add_event_cb(btn_stomp_off, modo_stomp_handler, LV_EVENT_CLICKED, (void*)0);
+
+    /* Modo Preset */
+    lv_obj_t *lbl_pres = lv_label_create(panel);
+    lv_label_set_text(lbl_pres, "MODO PRESET");
+    lv_obj_set_style_text_font(lbl_pres, &fonte_menu_26, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl_pres, lv_color_hex(0xC9922B), LV_PART_MAIN);
+    lv_obj_align(lbl_pres, LV_ALIGN_LEFT_MID, 20, 10);
+
+    lv_obj_t *btn_pres_on = lv_btn_create(panel);
+    lv_obj_set_size(btn_pres_on, 90, 36);
+    lv_obj_align(btn_pres_on, LV_ALIGN_LEFT_MID, 160, 10);
+    lv_label_set_text(lv_label_create(btn_pres_on), "ON");
+    lv_obj_add_event_cb(btn_pres_on, modo_preset_handler, LV_EVENT_CLICKED, (void*)1);
+
+    lv_obj_t *btn_pres_off = lv_btn_create(panel);
+    lv_obj_set_size(btn_pres_off, 90, 36);
+    lv_obj_align(btn_pres_off, LV_ALIGN_LEFT_MID, 270, 10);
+    lv_label_set_text(lv_label_create(btn_pres_off), "OFF");
+    lv_obj_add_event_cb(btn_pres_off, modo_preset_handler, LV_EVENT_CLICKED, (void*)0);
+
+    /* Botão fechar */
+    lv_obj_t *btn_close = lv_btn_create(panel);
+    lv_obj_align(btn_close, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
+    lv_obj_set_size(btn_close, 60, 36);
+    lv_obj_set_style_bg_color(btn_close, lv_color_hex(0x8A6420), LV_PART_MAIN);
+    lv_obj_set_style_radius(btn_close, 6, LV_PART_MAIN);
+    lv_label_set_text(lv_label_create(btn_close), "FECHAR");
+    lv_obj_add_event_cb(btn_close, fechar_overlay_handler, LV_EVENT_CLICKED, ov);
+}
+
+/* --- Handlers auxiliares --- */
+static void velocidade_handler(lv_event_t *e)
+{
+    int fps = (int)(intptr_t)lv_event_get_user_data(e);
+    video_set_fps(fps);
+    velocidade_atual = fps;
+    ESP_LOGI(TAG, "Video FPS: %d", fps);
+}
+
+static void modo_stomp_handler(lv_event_t *e) {
+    int on = (int)(intptr_t)lv_event_get_user_data(e);
+    ESP_LOGI(TAG, "Stomp Mode: %s", on ? "ON" : "OFF");
+}
+
+static void modo_preset_handler(lv_event_t *e) {
+    int on = (int)(intptr_t)lv_event_get_user_data(e);
+    ESP_LOGI(TAG, "Preset Mode: %s", on ? "ON" : "OFF");
+}
+
+static void fechar_overlay_handler(lv_event_t *e)
+{
+    lv_obj_t *ov = (lv_obj_t *)lv_event_get_user_data(e);
+    if (ov) lv_obj_del(ov);
+    /* delete o panel too (é filho do scr, mas overlay some) */
+    lv_obj_t *scr = lv_scr_act();
+    uint32_t n = lv_obj_get_child_cnt(scr);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *child = lv_obj_get_child(scr, i);
+        if (child && lv_obj_get_parent(child) == scr) {
+            /* panel é o único overlay grande */
+            lv_obj_t *p = lv_obj_get_child(scr, i);
+            if (p != ov && p != NULL) {
+                /* verifica se é o panel pelo tamanho */
+                if (lv_obj_get_width(p) > 300 && lv_obj_get_height(p) > 200) {
+                    lv_obj_del(p);
+                    break;
+                }
+            }
+        }
+    }
+    /* volta pro video bg */
+    sd_fundos_esconder();
+}
+
+/* --- Teclado popup (abre sobre a tela) --- */
+static void abrir_teclado_popup(void)
+{
+    teclado_box = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(teclado_box);
+    lv_obj_set_size(teclado_box, 800, 480);
+    lv_obj_set_pos(teclado_box, 0, 0);
+    lv_obj_set_style_bg_color(teclado_box, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(teclado_box, LV_OPA_90, LV_PART_MAIN);
+    lv_obj_clear_flag(teclado_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *titulo = texto(teclado_box, "NOME DO PRESET",
+                             &fonte_menu_22, OURO);
+    lv_obj_set_style_text_letter_space(titulo, 3, LV_PART_MAIN);
+    lv_obj_align(titulo, LV_ALIGN_TOP_MID, 0, 8);
+
+    ta_nome = lv_textarea_create(teclado_box);
+    lv_textarea_set_one_line(ta_nome, true);
+    lv_textarea_set_max_length(ta_nome, sizeof(nome_preset) - 1);
+    lv_textarea_set_text(ta_nome, nome_preset);
+    lv_obj_set_size(ta_nome, 520, 50);
+    lv_obj_align(ta_nome, LV_ALIGN_TOP_MID, 0, 38);
+    lv_obj_set_style_bg_color(ta_nome, lv_color_hex(0x151008), LV_PART_MAIN);
+    lv_obj_set_style_border_color(ta_nome, lv_color_hex(OURO), LV_PART_MAIN);
+    lv_obj_set_style_border_width(ta_nome, 2, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ta_nome, lv_color_hex(OURO_CLARO), LV_PART_MAIN);
+    lv_obj_set_style_text_font(ta_nome, &fonte_menu_26, LV_PART_MAIN);
+
+    lv_obj_t *kb = lv_keyboard_create(teclado_box);
+    lv_obj_set_size(kb, 800, 372);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_UPPER);
+    lv_keyboard_set_textarea(kb, ta_nome);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(0x0E0A04), LV_PART_MAIN);
+    lv_obj_set_style_text_color(kb, lv_color_hex(OURO_CLARO), LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(kb, lv_color_hex(0x241A0A), LV_PART_ITEMS);
+    lv_obj_set_style_border_color(kb, lv_color_hex(OURO_ESCURO), LV_PART_ITEMS);
+    lv_obj_set_style_border_width(kb, 1, LV_PART_ITEMS);
+    lv_obj_add_event_cb(kb, ev_teclado_handler, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, ev_teclado_handler, LV_EVENT_CANCEL, NULL);
+}
+
+static void ev_teclado_handler(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY) {
+        const char *t = lv_textarea_get_text(ta_nome);
+        if (t && t[0]) {
+            strncpy(nome_preset, t, sizeof(nome_preset) - 1);
+            nome_preset[sizeof(nome_preset) - 1] = '\0';
+            if (lbl_preset) lv_label_set_text(lbl_preset, nome_preset);
+            ESP_LOGI(TAG, "preset salvo: %s", nome_preset);
+        }
+        fechar_teclado_local();
+    } else if (code == LV_EVENT_CANCEL) {
+        fechar_teclado_local();
+    }
+}
+
+static void fechar_teclado_local(void)
+{
+    if (teclado_box) {
+        lv_obj_del(teclado_box);
+        teclado_box = NULL;
+        ta_nome = NULL;
+    }
+}
+
+/* --- Função principal chamada pelo app_main --- */
+void palco_montar(lv_obj_t *tela)
+{
+    /* Fundo do SD (se disponível) ou mantém video */
+    fundo_t atual = sd_fundos_atual();
+    if (atual == FUNDO_VIDEO) {
+        /* Tenta fundo do SD */
+        sd_fundos_mostrar(tela, FUNDO_SD_1);
+    }
+
+    /* Header: NOME DO PRESET */
+    lbl_preset = lv_label_create(tela);
+    lv_obj_set_style_text_font(lbl_preset, &fonte_playfair_40, LV_PART_MAIN);
+    lv_label_set_text_fmt(lbl_preset, "PRESET: %s", nome_preset);
+    lv_obj_set_style_text_color(lbl_preset, lv_color_hex(OURO_CLARO), LV_PART_MAIN);
+    lv_obj_align(lbl_preset, LV_ALIGN_TOP_MID, 0, 8);
+
+    /* Menu circular principal: 4 ícones */
+    criar_botao_circular(tela, "NOME", LV_ALIGN_BOTTOM_LEFT, 30, -30,
+                         menu_nome_handler, NULL);
+    criar_botao_circular(tela, "SISTEMA", LV_ALIGN_BOTTOM_RIGHT, -30, -30,
+                         menu_sistema_handler, NULL);
+    criar_botao_circular(tela, "MIDI", LV_ALIGN_TOP_LEFT, 30, 30,
+                         menu_midi_handler, NULL);
+    criar_botao_circular(tela, "IMP.", LV_ALIGN_TOP_RIGHT, -30, 30,
+                         menu_implementacao_handler, NULL);
+
+    ESP_LOGI(TAG, "Menu profissional montado (Nome, Sistema, MIDI, Implementaçāo)");
+}
+
+/* (forward declarations now at top with professional menus section) */
+

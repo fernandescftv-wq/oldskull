@@ -1,0 +1,39 @@
+#include "bsp/esp-bsp.h"
+
+#include "esp_err.h"
+#include "esp_log.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "oldskull_app";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Inicializando display JC4880P433C...");
+
+    lv_display_t *display = bsp_display_start();
+
+    if (display == NULL) {
+        ESP_LOGE(TAG, "Falha ao inicializar o display");
+        return;
+    }
+
+    ESP_ERROR_CHECK(bsp_display_backlight_on());
+
+    ESP_LOGI(TAG, "Display inicializado corretamente");
+    ESP_LOGI(TAG, "Backlight ligado");
+
+/* OLDSKULL_IMAGE_ADDED */
+    extern const lv_img_dsc_t oldskull_pedal;
+    bsp_display_lock(0);
+    lv_obj_t *oldskull_img = lv_img_create(lv_scr_act());
+    lv_img_set_src(oldskull_img, &oldskull_pedal);
+    lv_img_set_zoom(oldskull_img, 120);
+    lv_obj_center(oldskull_img);
+    bsp_display_unlock();
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

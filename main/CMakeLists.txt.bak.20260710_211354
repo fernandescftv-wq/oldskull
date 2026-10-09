@@ -1,0 +1,17 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "oldskull_pedal.c"
+        "oldskull_auto_image.c"
+        "../src/bsp_display.c"
+        "../src/jc4880p433c_bsp.c"
+    INCLUDE_DIRS
+        "."
+        "../include"
+    REQUIRES
+        lvgl
+        esp_lvgl_port
+        esp_lcd_st7701
+        esp_lcd_touch
+        esp_lcd_touch_gt911
+)

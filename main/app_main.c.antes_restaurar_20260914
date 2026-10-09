@@ -1,0 +1,305 @@
+/*
+ * app_main.c — Tela 1 (vídeo + carrossel) preservada; Tela 2 = menu central
+ * 4 bots redondos tipo Neural DSP: NOME, SISTEMA, MIDI, IMPLEMENTAÇÃO.
+ * Swipe vertical UP na Tela 2 volta para Tela 1 (via LV_EVENT_GESTURE).
+ */
+
+#include "bsp/esp-bsp.h"
+#include "video_loop.h"
+#include "palco.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "lvgl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdio.h>
+#include <string.h>
+
+static const char *TAG = "oldskull_app";
+
+/* ---- forward declarations (antes de criar_tela2, chamada depois) ---- */
+static void trocar_tela(uint8_t nova_tela);
+static void evento_gesture_volta(lv_event_t *e);
+static void btn_clicado(lv_event_t *e);
+static lv_obj_t *criar_botao_redondo(lv_obj_t *pai, const char *txt,
+                                     lv_align_t align, int32_t x, int32_t y,
+                                     const void *user_data);
+
+extern const lv_img_dsc_t amp_lonestar;
+extern const lv_img_dsc_t amp_soldano;
+extern const lv_img_dsc_t amp_jp2c;
+extern const lv_img_dsc_t tela_palco;
+
+#define TOTAL_DE_TELAS 2
+#define QTD_AMPS       3
+
+static const lv_img_dsc_t *amp_img[QTD_AMPS] = { &amp_lonestar, &amp_soldano, &amp_jp2c };
+static const char         *amp_nome[QTD_AMPS] = { "LONESTAR", "SOLDANO", "JP-2C" };
+
+static lv_obj_t *amp_obj[QTD_AMPS];
+static int       amp_atual = 0;
+
+/* ---- globals ---- */
+static lv_obj_t *tela1_obj   = NULL;
+static lv_obj_t *tela2_obj   = NULL;
+static uint8_t   tela_ativa  = 0;
+bool             tela2_montada = false;
+
+/* ---- animações helper ---- */
+static void amp_set_x(void *obj, int32_t v) { lv_obj_set_x(obj, v); }
+static void amp_set_y(void *obj, int32_t v) { lv_obj_set_y(obj, v); }
+
+static void arranjar_carrossel(void)
+{
+    for (int i = 0; i < QTD_AMPS; i++) {
+        if (!amp_obj[i]) continue;
+        int d = i - amp_atual;
+        if (d < -1) d += QTD_AMPS;
+        if (d >  1) d -= QTD_AMPS;
+
+        int w = amp_img[i]->header.w;
+        int cx, cy;
+        if      (d ==  0) { cx = 400; cy = 275; }
+        else if (d == -1) { cx = 140; cy = 175; }
+        else              { cx = 660; cy = 175; }
+
+        int tx = cx - w / 2, ty = cy - 150;
+
+        lv_obj_clear_flag(amp_obj[i], LV_OBJ_FLAG_HIDDEN);
+        if (d == 0) {
+            lv_obj_move_foreground(amp_obj[i]);
+            lv_obj_set_style_opa(amp_obj[i], LV_OPA_COVER, 0);
+        } else {
+            lv_obj_move_background(amp_obj[i]);
+            lv_obj_set_style_opa(amp_obj[i], LV_OPA_50, 0);
+        }
+
+        lv_anim_t ax;
+        lv_anim_init(&ax);
+        lv_anim_set_var(&ax, amp_obj[i]);
+        lv_anim_set_time(&ax, 350);
+        lv_anim_set_path_cb(&ax, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&ax, amp_set_x);
+        lv_anim_set_values(&ax, lv_obj_get_x(amp_obj[i]), tx);
+        lv_anim_start(&ax);
+
+        lv_anim_t ay;
+        lv_anim_init(&ay);
+        lv_anim_set_var(&ay, amp_obj[i]);
+        lv_anim_set_time(&ay, 350);
+        lv_anim_set_path_cb(&ay, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&ay, amp_set_y);
+        lv_anim_set_values(&ay, lv_obj_get_y(amp_obj[i]), ty);
+        lv_anim_start(&ay);
+    }
+}
+
+static void criar_carrossel(lv_obj_t *tela)
+{
+    lv_obj_t *cont = lv_obj_create(tela);
+    lv_obj_remove_style_all(cont);
+    lv_obj_set_size(cont, 800, 480);
+    lv_obj_set_pos(cont, 0, 0);
+    lv_obj_clear_flag(cont, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_move_foreground(cont);
+
+    for (int i = 0; i < QTD_AMPS; i++) {
+        lv_obj_t *im = lv_img_create(cont);
+        lv_img_set_src(im, amp_img[i]);
+        lv_obj_clear_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(im, LV_OBJ_FLAG_SCROLLABLE);
+        amp_obj[i] = im;
+    }
+    arranjar_carrossel();
+}
+
+/* ==== handler botões ====
+ * LV_EVENT_CLICKED é disparado apenas quando o LVGL confirma clique
+ * (sem movimento > threshold) — então não interferem com swipe.
+ */
+static void btn_clicado(lv_event_t *e)
+{
+    const char *tag = (const char *)lv_event_get_user_data(e);
+    ESP_LOGI(TAG, "CLICK: %s", tag);
+
+    if (!strcmp(tag, "NOME"))          palco_abrir_teclado();
+    else if (!strcmp(tag, "SISTEMA"))  palco_abrir_sistema();
+    else if (!strcmp(tag, "MIDI"))     ESP_LOGI(TAG, "MIDI: em desenvolvimento");
+    else if (!strcmp(tag, "IMPLE"))    palco_abrir_implementacao();
+}
+
+/* ==== swipe UP na tela 2 volta pra tela 1 ==== */
+static void evento_gesture_volta(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_GESTURE)
+        return;
+
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (tela_ativa == 1 && dir == LV_DIR_BOTTOM) {
+        ESP_LOGI(TAG, "Swipe UP → volta pra tela 1");
+        trocar_tela(0);
+    }
+}
+
+/* botão redondo central tipo pedal Neural DSP */
+static lv_obj_t *criar_botao_redondo(lv_obj_t *pai, const char *txt,
+                                     lv_align_t align, int32_t x, int32_t y,
+                                     const void *user_data)
+{
+    lv_obj_t *btn = lv_btn_create(pai);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, 96, 96);
+    lv_obj_align(btn, align, x, y);
+
+    /* corpo do pedal */
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2A1E08), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, 3, LV_PART_MAIN);
+    lv_obj_set_style_border_color(btn, lv_color_hex(0xF3C969), LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 48, LV_PART_MAIN);   /* redondo completo */
+    lv_obj_set_style_pad_all(btn, 0, LV_PART_MAIN);
+
+    /* efeito glow leve */
+    lv_obj_set_style_shadow_color(btn, lv_color_hex(0xF3C969), LV_PART_MAIN);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(btn, 8, LV_PART_MAIN);
+
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    /* CLICK funciona automaticamente no lv_btn_create */
+    lv_obj_add_event_cb(btn, btn_clicado, LV_EVENT_CLICKED, (void *)user_data);
+
+    /* label central */
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, txt);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xF3C969), LV_PART_MAIN);
+    lv_obj_center(lbl);
+
+    return btn;
+}
+
+/* ==== TELA 2: fundo + 4 bots redondos no centro ==== */
+static lv_obj_t *criar_tela2(void)
+{
+    lv_obj_t *tela = lv_obj_create(NULL);
+    lv_obj_clear_flag(tela, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(tela, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_style_bg_color(tela, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tela, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tela, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tela, 0, LV_PART_MAIN);
+
+    /* fundo steampunk */
+    lv_obj_t *img = lv_img_create(tela);
+    lv_img_set_src(img, &tela_palco);
+    lv_obj_set_size(img, tela_palco.header.w, tela_palco.header.h);
+    lv_obj_set_pos(img, 0, 0);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* tela pai NÃO capta toque → eventos fluem pros bots */
+    lv_obj_clear_flag(tela, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(tela, evento_gesture_volta, LV_EVENT_GESTURE, NULL);
+
+    return tela;
+}
+
+/* ==== monta os 4 bots quando chega pela 1ª vez ==== */
+static void montar_menu_tela2(lv_obj_t *tela)
+{
+    /* header: nome do preset */
+    lv_obj_t *hdr = lv_label_create(tela);
+    lv_label_set_text(hdr, "PRESET: ROCK LEAD");
+    lv_obj_set_style_text_color(hdr, lv_color_hex(0xF3C969), LV_PART_MAIN);
+    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 10);
+
+    /* 4 bots redondos em cruz central */
+    criar_botao_redondo(tela, "NOME",       LV_ALIGN_CENTER, -120, -100, "NOME");
+    criar_botao_redondo(tela, "SISTEMA",    LV_ALIGN_CENTER,  120, -100, "SISTEMA");
+    criar_botao_redondo(tela, "MIDI",       LV_ALIGN_CENTER, -120,  100, "MIDI");
+    criar_botao_redondo(tela, "IMPLE",      LV_ALIGN_CENTER,  120,  100, "IMPLE");
+
+    ESP_LOGI(TAG, "Tela 2: 4 menus profissionais montados (redondo/Neural DSP)");
+}
+
+/* ==== troca de tela ==== */
+static void trocar_tela(uint8_t nova_tela)
+{
+    if (nova_tela >= TOTAL_DE_TELAS) return;
+
+    tela_ativa = nova_tela;
+
+    if (nova_tela == 1 && !tela2_montada) {
+        montar_menu_tela2(tela2_obj);
+        tela2_montada = true;
+    }
+
+    if (bsp_display_lock(500)) {
+        lv_scr_load_anim(
+            (nova_tela == 0) ? tela1_obj : tela2_obj,
+            (nova_tela == 0) ? LV_SCR_LOAD_ANIM_MOVE_RIGHT
+                             : LV_SCR_LOAD_ANIM_MOVE_LEFT,
+            300, 0, false);
+        bsp_display_unlock();
+    }
+}
+
+/* botão "trocar amp" chamado por palco.c */
+void app_trocar_amp(void)
+{
+    if (!tela1_obj) return;
+    amp_atual = (amp_atual + 1) % QTD_AMPS;
+    arranjar_carrossel();
+    ESP_LOGI(TAG, "amp: %s", amp_nome[amp_atual]);
+}
+
+/* ==== app_main ==== */
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Inicializando display JC4880P433C...");
+
+    /* Config oficial do demo lvgl_sw_rotation (fábrica) */
+    bsp_display_cfg_t cfg = {
+        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
+        .buffer_size = CONFIG_BSP_JC4880P443C_LVGL_BUFFER_SIZE,
+        .double_buffer = CONFIG_BSP_JC4880P443C_LVGL_DOUBLE_BUFFER,
+        .flags = {
+            .buff_dma = false,
+            .buff_spiram = false,
+            .sw_rotate = true,
+        }
+    };
+
+    lv_display_t *display = bsp_display_start_with_config(&cfg);
+    if (display == NULL) {
+        ESP_LOGE(TAG, "Falha ao inicializar o display");
+        return;
+    }
+    ESP_ERROR_CHECK(bsp_display_backlight_on());
+    lv_disp_set_rotation(display, LV_DISPLAY_ROTATION_90);
+
+    if (bsp_display_lock(1000)) {
+        /* TELA 1: video + carrossel */
+        tela1_obj = lv_obj_create(NULL);
+        lv_obj_clear_flag(tela1_obj, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollbar_mode(tela1_obj, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_set_style_bg_color(tela1_obj, lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(tela1_obj, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(tela1_obj, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(tela1_obj, 0, LV_PART_MAIN);
+        video_loop_start(tela1_obj);
+        criar_carrossel(tela1_obj);
+
+        /* TELA 2: fundo + menu */
+        tela2_obj = criar_tela2();
+
+        lv_scr_load(tela1_obj);
+        bsp_display_unlock();
+        ESP_LOGI(TAG, "2 telas prontas | tela1: video+carrossel, tela2: menu central");
+    }
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

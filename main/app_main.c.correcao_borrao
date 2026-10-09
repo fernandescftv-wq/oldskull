@@ -1,0 +1,97 @@
+#include "bsp/esp-bsp.h"
+
+#include "esp_err.h"
+#include "esp_log.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "oldskull_app";
+
+extern const lv_img_dsc_t oldskull_pedal;
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Inicializando display JC4880P433C...");
+
+    lv_display_t *display = bsp_display_start();
+
+    if (display == NULL) {
+        ESP_LOGE(TAG, "Falha ao inicializar o display");
+        return;
+    }
+
+    ESP_ERROR_CHECK(bsp_display_backlight_on());
+
+    ESP_LOGI(TAG, "Display inicializado corretamente");
+    ESP_LOGI(TAG, "Backlight ligado");
+
+    if (bsp_display_lock(1000)) {
+        lv_obj_t *screen = lv_scr_act();
+
+        /*
+         * Fundo preto para qualquer área que não seja ocupada
+         * pela imagem, sem cortar nem deformar seu conteúdo.
+         */
+        lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+
+        lv_obj_t *image = lv_img_create(screen);
+        lv_img_set_src(image, &oldskull_pedal);
+
+        /*
+         * A imagem é girada 90 graus.
+         * Por isso, largura e altura são invertidas no cálculo.
+         */
+        const uint32_t image_width_after_rotation = oldskull_pedal.header.h;
+        const uint32_t image_height_after_rotation = oldskull_pedal.header.w;
+
+        const uint32_t screen_width = lv_obj_get_width(screen);
+        const uint32_t screen_height = lv_obj_get_height(screen);
+
+        /*
+         * LVGL:
+         * 256 = 100% da imagem.
+         *
+         * Escolhemos a menor escala para a imagem caber inteira:
+         * - sem corte;
+         * - sem esticar;
+         * - sem deformar.
+         */
+        const uint32_t zoom_x =
+            (screen_width * 256U) / image_width_after_rotation;
+
+        const uint32_t zoom_y =
+            (screen_height * 256U) / image_height_after_rotation;
+
+        const uint16_t zoom = (zoom_x < zoom_y) ? zoom_x : zoom_y;
+
+        lv_img_set_pivot(
+            image,
+            oldskull_pedal.header.w / 2,
+            oldskull_pedal.header.h / 2
+        );
+
+        lv_img_set_angle(image, 900);
+        lv_img_set_zoom(image, zoom);
+        lv_obj_center(image);
+
+        ESP_LOGI(
+            TAG,
+            "Tela %lux%lu | Imagem %dx%d | Zoom %u",
+            (unsigned long)screen_width,
+            (unsigned long)screen_height,
+            oldskull_pedal.header.w,
+            oldskull_pedal.header.h,
+            zoom
+        );
+
+        bsp_display_unlock();
+    } else {
+        ESP_LOGE(TAG, "Nao foi possivel bloquear o LVGL");
+    }
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

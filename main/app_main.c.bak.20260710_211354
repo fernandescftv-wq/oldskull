@@ -1,0 +1,27 @@
+#include "bsp/esp-bsp.h"
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+
+static const char *TAG = "oldskull_app";
+
+\1
+
+    ESP_LOGI("APP", "Inicializando display JC4880P433C...");
+
+    lv_display_t *display = bsp_display_start();
+    if (display == NULL) {
+        ESP_LOGE("APP", "Falha ao inicializar o display");
+        return;
+    }
+
+    ESP_ERROR_CHECK(bsp_display_backlight_on());
+
+    ESP_LOGI(TAG, "Aplicacao iniciou corretamente");
+    ESP_LOGW(TAG, "LVGL/display ainda nao foram inicializados");
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

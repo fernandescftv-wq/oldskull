@@ -1,0 +1,24 @@
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+
+void oldskull_pedal_show(void);
+
+static const char *TAG = "oldskull_app";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Oldskull app_main iniciado");
+
+    /*
+     * OBS:
+     * Aqui estamos apenas criando o ponto de entrada.
+     * A inicializacao real do display/LVGL depende do BSP da placa.
+     */
+    oldskull_pedal_show();
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}

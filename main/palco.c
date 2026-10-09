@@ -11,6 +11,7 @@
 #include "video_loop.h"
 #include "sd_fundos.h"
 #include "web_server.h"
+#include "esp_now_tx.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include <stdio.h>
@@ -537,7 +538,7 @@ static const pedal_web_t pedais_web[] = {
 static void ev_pedal_slot(lv_event_t *e);
 static int pedais_colocar_em_slot(int p, int pos);
 static void ev_qtd_pedais(lv_event_t *e);
-static int qtd_pedais_alvo = 8;   /* quantos pedais devem ficar na base */
+static int qtd_pedais_alvo = 5;   /* TESTE RX: 5 pedais centrais */
 static lv_obj_t *lbl_qtd_pedais = NULL;
 static bool   modo_stop    = false;      /* modo apresentacao: pedal toggla liga/desliga */
 static bool   pedal_ligado[SLOT_COUNT];  /* estado do efeito por pedal no modo stop */
@@ -876,24 +877,17 @@ static void ev_pedal_slot(lv_event_t *e)
         arrastar_img = NULL;
 
         if (!arrastar_moveu) {
+            /* toque curto: alterna sumir/reaparecer no slot + envia ao RX */
             arrastar_moveu = false;
-            if (modo_stop) {
-                /* modo STOP: alterna liga/desliga do efeito (acende/esmaece) */
-                if (pedal_obj[origem]) {
-                    pedal_ligado[origem] = !pedal_ligado[origem];
-                    lv_obj_set_style_opa(pedal_obj[origem],
-                        pedal_ligado[origem] ? LV_OPA_COVER : LV_OPA_30, LV_PART_MAIN);
-                    ESP_LOGI(TAG, "pedal slot %d -> %s",
-                             origem, pedal_ligado[origem]?"ON":"OFF");
-                }
-            } else if (pedal_obj[origem]) {
-                for (int p = 0; p < (int)QTD_PEDAIS_WEB; p++)
-                    if (pedal_em_slot[origem] == &pedais_web[p] && pedal_check[p])
-                        toggle_web_set(pedal_check[p], false);
-                lv_obj_del(pedal_obj[origem]);
-                pedal_obj[origem] = NULL;
-                pedal_em_slot[origem] = NULL;
-                ESP_LOGI(TAG, "pedal removido do slot %d", origem);
+            if (pedal_obj[origem]) {
+                pedal_ligado[origem] = !pedal_ligado[origem];
+                lv_obj_set_style_opa(pedal_obj[origem],
+                    pedal_ligado[origem] ? LV_OPA_COVER : LV_OPA_20, LV_PART_MAIN);
+                ESP_LOGI(TAG, "pedal slot %d -> %s",
+                         origem, pedal_ligado[origem]?"ON(slot)":"sumido");
+                /* TESTE RX: fxMask fixo 0x1F (5 FX do protocolo) */
+                esp_now_tx_aplicar(banco_ativo + 1, 0x1F,
+                                   (canal_amp > 0) ? 2 : 1);
             }
             return;
         }
@@ -960,6 +954,8 @@ static int pedais_colocar_em_slot(int p, int pos)
    pedais, usa o padrao (cicla os 3 modelos pelos 8 slots = 2 opcoes). */
 static void pedais_aplicar_padrao(int b)
 {
+    /* pedais nascem ACESOS (tocar = sume/reaparece) */
+    for (int i = 0; i < SLOT_COUNT; i++) pedal_ligado[i] = true;
     /* primeiro libera o que estiver marcado como removido */
     int cheios = 0;
     for (int i = 0; i < SLOT_COUNT; i++)

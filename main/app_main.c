@@ -2,8 +2,9 @@
 #include "video_loop.h"
 #include "palco.h"
 #include "wifi.h"
+#include "esp_now_tx.h"
 #include "web_server.h"
-#include "esp_err.h"
+#include "c6_ota.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
@@ -241,9 +242,21 @@ void app_main(void)
         ESP_LOGI(TAG, "video + carrossel + palco prontos");
     }
 
+    /* OTA do C6 ANTES do WiFi: grava o bridge ESP-NOW e reinicia (1x).
+       Se a flag NVS indicar que já gravou, segue direto (sem reboot). */
+    esp_err_t c6r = c6_ota_update_once();
+    if (c6r == ESP_OK) {
+        /* C6 reiniciando com o firmware novo — o P4 também reinicia p/ ressinc */
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        esp_restart();
+    }
+
     /* WiFi AP (old_skull) + HTTP server para controlar desde el celular */
     wifi_init_ap();
     web_server_init();
+
+    /* ESP-NOW -> RX: envia comandos de pedais/bancos via C6 */
+    esp_now_tx_init();
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
