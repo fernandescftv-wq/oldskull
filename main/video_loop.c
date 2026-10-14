@@ -61,6 +61,19 @@ void video_toggle_pause(void)
     ESP_LOGI(TAG, "video %s", g_pausado ? "congelado" : "retomado");
 }
 
+/* esconde (true) ou mostra (false) a imagem do video de fundo. NAO pausa o
+ * processamento: o loop continua decodificando frames normalmente; so nao
+ * desenha por cima do fundo estatico do SKIN. */
+void video_hide(bool hid)
+{
+    if (!g_img) return;
+    if (hid)
+        lv_obj_add_flag(g_img, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_clear_flag(g_img, LV_OBJ_FLAG_HIDDEN);
+    ESP_LOGI(TAG, "video frame %s", hid ? "escondido" : "visivel");
+}
+
 static void carregar_cache(void)
 {
     FILE *f = fopen("/spiffs/frames.bin", "rb");

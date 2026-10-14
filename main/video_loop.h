@@ -14,3 +14,6 @@ void video_set_fps(int fps);
 
 /* congela/retoma o video (toggle): segura o frame atual quando congelado. */
 void video_toggle_pause(void);
+
+/* mostra/esconde o video de fundo (usado pelo SKIN de fundo estatico). */
+void video_hide(bool hid);

@@ -44,25 +44,13 @@ static fundo_t   g_atual = FUNDO_VIDEO;
 
 static const char *caminho_fundo(fundo_t t)
 {
-    if (t == FUNDO_SD_1) {
-        if (g_mounted) {
-            char p[64];
-            snprintf(p, sizeof(p), SD_MOUNT_POINT "/fundo1.jpg");
-            struct stat st;
-            if (stat(p, &st) == 0) return SD_MOUNT_POINT "/fundo1.jpg";
-        }
-        return NULL;   /* sem fallback SPIFFS: fundo de teste nao aparece */
+    /* as 3 imagens ficam no SPIFFS (gravadas junto do firmware em 0x410000) */
+    switch (t) {
+        case FUNDO_SD_1: return "/spiffs/images/steampunk_bg.jpg";
+        case FUNDO_SD_2: return "/spiffs/images/moldura_bg.jpg";
+        case FUNDO_SD_3: return "/spiffs/images/painel_bg.jpg";
+        default: return NULL;
     }
-    if (t == FUNDO_SD_2) {
-        if (g_mounted) {
-            char p[64];
-            snprintf(p, sizeof(p), SD_MOUNT_POINT "/fundo2.jpg");
-            struct stat st;
-            if (stat(p, &st) == 0) return SD_MOUNT_POINT "/fundo2.jpg";
-        }
-        return NULL;
-    }
-    return NULL;
 }
 
 esp_err_t sd_fundos_mount(void)
@@ -218,8 +206,10 @@ esp_err_t sd_fundos_mostrar(lv_obj_t *tela, fundo_t tipo)
     lv_img_set_src(g_fundo_img, &dsc);
     lv_obj_set_size(g_fundo_img, FUN_W, FUN_H);
     lv_obj_align(g_fundo_img, LV_ALIGN_CENTER, 0, 0);
+    /* fundo ATRAS da UI (menus/amp/pedais) e atras do video: a UI fica visivel */
+    lv_obj_move_background(g_fundo_img);
     lv_obj_clear_flag(g_fundo_img, LV_OBJ_FLAG_HIDDEN);
-    /* video_hide removido - nao existe mais */
+    video_hide(true);   /* nao desenha o video por cima; loop segue processando */
     g_atual = tipo;
     ESP_LOGI(TAG, "fundo SD mostrado: %s", path);
     return ESP_OK;
@@ -228,7 +218,7 @@ esp_err_t sd_fundos_mostrar(lv_obj_t *tela, fundo_t tipo)
 void sd_fundos_esconder(void)
 {
     if (g_fundo_img) lv_obj_add_flag(g_fundo_img, LV_OBJ_FLAG_HIDDEN);
-    video_toggle_pause();   /* volta o video */
+    video_hide(false);   /* video de volta; nao pausou, so estava escondido */
     g_atual = FUNDO_VIDEO;
 }
 

@@ -500,7 +500,7 @@ static const submenu_t menus[] = {
     { LV_SYMBOL_SHUFFLE,   "PEDAIS",  { NULL, NULL, NULL, NULL, NULL, NULL } },   /* gerado: 8 loops */
     { LV_SYMBOL_AUDIO,     "AMP",     { "Canal 1", "Canal 2", "Canal 3", "Boost", "Trocar Amp", NULL } },
     { LV_SYMBOL_WIFI,      "REDE",    { "WiFi", "Web: off", "ESP-NOW", "Pareamento", "Status", NULL } },
-    { LV_SYMBOL_IMAGE,     "SKIN",    { "Vid: lento", "Vid: normal", "Vid: rapido", "Fundo SD 1", "Fundo SD 2", "Fundo: video", NULL } },
+    { LV_SYMBOL_IMAGE,  "SKIN", { "Vid: lento", "Vid: normal", "Vid: rapido", "Fundo SD 1", "Fundo SD 2", "Fundo SD 3", "Fundo: video", NULL } },
     { LV_SYMBOL_SETTINGS,  "SISTEMA", { "Menu: abaixo", "Menu: esquerda", "Cor das letras", "Estilo das letras", "Brilho", NULL } },
     { LV_SYMBOL_VOLUME_MAX, "MIDI",    { "Canal MIDI", "Clock Sync", "Scenes", NULL, NULL, NULL } },
 };
@@ -1114,6 +1114,10 @@ static void ev_item(lv_event_t *e)
     }
     if (strcmp(nome, "Fundo SD 2") == 0) {
         sd_fundos_mostrar(lv_scr_act(), FUNDO_SD_2);
+        fechar_submenu(); return;
+    }
+    if (strcmp(nome, "Fundo SD 3") == 0) {
+        sd_fundos_mostrar(lv_scr_act(), FUNDO_SD_3);
         fechar_submenu(); return;
     }
     if (strcmp(nome, "Fundo: video") == 0) {

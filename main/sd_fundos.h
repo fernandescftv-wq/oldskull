@@ -32,8 +32,9 @@
 /* tipos de fundo */
 typedef enum {
     FUNDO_VIDEO = 0,   /* video em loop (atual, do SPIFFS) */
-    FUNDO_SD_1  = 1,   /* fundo1.jpg do SD */
-    FUNDO_SD_2  = 2,   /* fundo2.jpg do SD */
+    FUNDO_SD_1  = 1,   /* steampunk_bg.jpg (SPIFFS) */
+    FUNDO_SD_2  = 2,   /* moldura_bg.jpg (SPIFFS) */
+    FUNDO_SD_3  = 3,   /* painel_bg.jpg (SPIFFS) */
     FUNDO_MAX
 } fundo_t;
 

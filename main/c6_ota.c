@@ -19,7 +19,7 @@ extern const uint8_t c6_fw_bin_start[] asm("_binary_c6_fw_bin_start");
 extern const uint8_t c6_fw_bin_end[]   asm("_binary_c6_fw_bin_end");
 
 #define OTA_CHUNK 1500   /* <= EH_RPC_OTA_CHUNK_MAX (1536) */
-#define NVS_KEY   "c6_fw_v8"   /* v4: ACK em tempo real do ESP-NOW */
+#define NVS_KEY   "c6_fw_v14"  /* v14: força OTA - confirma RX_MAC EC:E3:34:14:8B:C4 no C6 */
 #define ESP_SKIP  2      /* convenienca local: ya estaba actualizado */
 
 /* retorna ESP_OK se flasheou o C6, ESP_SKIP se já estava atualizado */
