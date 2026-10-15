@@ -540,6 +540,7 @@ static int qtd_pedais_alvo = 5;   /* TESTE RX: 5 pedais centrais */
 static lv_obj_t *lbl_qtd_pedais = NULL;
 static bool   modo_stop    = false;      /* modo apresentacao: pedal toggla liga/desliga */
 static bool   pedal_ligado[SLOT_COUNT];  /* estado do efeito por pedal no modo stop */
+static uint8_t fx_mascara_enviada = 0;   /* bits ON enviados ao RX (pedal = XOR do bit) */
 static void ev_stop(lv_event_t *e);
 static lv_obj_t *slot_web[SLOT_COUNT];          /* containers na base da tela */
 static lv_obj_t *pedal_obj[SLOT_COUNT];         /* pedal dentro do slot (ou NULL) */
@@ -883,15 +884,12 @@ static void ev_pedal_slot(lv_event_t *e)
                     pedal_ligado[origem] ? LV_OPA_COVER : LV_OPA_20, LV_PART_MAIN);
                 ESP_LOGI(TAG, "pedal slot %d -> %s",
                          origem, pedal_ligado[origem]?"ON(slot)":"sumido");
-                /* modo pedal: ativa UM relé por toque (nao 0x1F).
-                   slot -> pedal (OD/CH/DL) -> um bit do fxMask. */
-                if (pedal_ligado[origem]) {
-                    esp_now_tx_aplicar(banco_ativo + 1, 1 << (origem % (int)QTD_PEDAIS_WEB),
-                                       (canal_amp > 0) ? 2 : 1);
-                } else {
-                    esp_now_tx_aplicar(banco_ativo + 1, 0,
-                                       (canal_amp > 0) ? 2 : 1);   /* desliga o unico */
-                }
+                /* modo pedal: CADA pedal liga/desliga o SEU rele, independente.
+                   bit = origem % 5 -> FX1,FX2,FX3,FX4,BOOST (5 reles distintos). */
+                uint8_t bit = 1 << (origem % 5);
+                fx_mascara_enviada ^= bit;   /* XOR: 2o toque apaga so o dele */
+                esp_now_tx_aplicar(banco_ativo + 1, fx_mascara_enviada,
+                                   (canal_amp > 0) ? 2 : 1);
             }
             return;
         }
