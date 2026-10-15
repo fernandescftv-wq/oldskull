@@ -17,7 +17,8 @@ static const char *TAG = "espnow_tx";
 
 // Packet protocolo RX (8 bytes little-endian): {cmd,bank,fxMask,ch,seq}
 static uint32_t seq = 0;
-static volatile int ack_status = -1;   /* -1=sem resposta, 0=OK, 1=FALHOU */
+volatile int ack_status = -1;   /* -1=sem resposta, 0=OK, 1=FALHOU */
+int esp_now_tx_ultimo_ack(void) { return ack_status; }
 
 /* callback do C6: status do ESP-NOW (0=OK, 1=FALHOU) ou ack diag (9B) */
 static void on_ack(uint32_t msg_id, const uint8_t *data, size_t len, void *ctx)

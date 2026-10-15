@@ -649,6 +649,22 @@ static void banco_aplicar(void)
         }
     }
     ESP_LOGI(TAG, "banco %d aplicado: %s", b, preset_nome);
+
+    /* aplica o banco TAMBEM no RX: mask = pedais do banco (FX1..FX3),
+       BOOST (bit4) fica como estava nos toques diretos */
+    uint8_t m = 0;
+    for (int p = 0; p < (int)QTD_PEDAIS_WEB && p < 4; p++)
+        if (banco_pedais[b][p]) m |= (1 << p);
+    fx_mascara_enviada = m;
+    {
+        nvs_handle_t h;
+        if (nvs_open("oldskull", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u8(h, "fxmask", m);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
+    esp_now_tx_aplicar(b + 1, m, (canal_amp > 0) ? 2 : 1);
 }
 
 /* chips BANCO 1/2/3 do painel preset: repinta nomes e marca o ativo */
@@ -888,6 +904,14 @@ static void ev_pedal_slot(lv_event_t *e)
                    bit = origem % 5 -> FX1,FX2,FX3,FX4,BOOST (5 reles distintos). */
                 uint8_t bit = 1 << (origem % 5);
                 fx_mascara_enviada ^= bit;   /* XOR: 2o toque apaga so o dele */
+                {   /* persiste: o P4 religa com o mesmo estado dos reles */
+                    nvs_handle_t h;
+                    if (nvs_open("oldskull", NVS_READWRITE, &h) == ESP_OK) {
+                        nvs_set_u8(h, "fxmask", fx_mascara_enviada);
+                        nvs_commit(h);
+                        nvs_close(h);
+                    }
+                }
                 esp_now_tx_aplicar(banco_ativo + 1, fx_mascara_enviada,
                                    (canal_amp > 0) ? 2 : 1);
             }
@@ -1562,6 +1586,25 @@ static void anim_cor_luz(void *obj, int32_t v)
     lv_obj_set_style_bg_color((lv_obj_t *)obj, lv_color_make(r, g, b), LV_PART_MAIN);
 }
 
+/* restaura o RX apos o boot: envia o mask persistido e REINTENTA ate o RX
+   confirmar o ACK (o C6 pode ainda estar re-inicializando o esp_now) */
+static int restaura_tentativas = 0;
+static void ev_restaura_rx(lv_timer_t *t)
+{
+    if (restaura_tentativas > 0 && esp_now_tx_ultimo_ack() == 0) {
+        lv_timer_del(t);
+        return;
+    }
+    if (restaura_tentativas >= 6) {
+        lv_timer_del(t);
+        ESP_LOGW(TAG, "restaura reles: desisti apos 6 tentativas");
+        return;
+    }
+    restaura_tentativas++;
+    esp_now_tx_aplicar(banco_ativo + 1, fx_mascara_enviada, (canal_amp > 0) ? 2 : 1);
+    ESP_LOGI(TAG, "restaura reles tentativa %d: mask=0x%02X", restaura_tentativas, fx_mascara_enviada);
+}
+
 /* ---- montagem da tela ---- */
 
 void palco_montar(lv_obj_t *tela)
@@ -1659,6 +1702,26 @@ void palco_montar(lv_obj_t *tela)
     bancos_carregar();
     banco_aplicar();
     pedais_aplicar_padrao(banco_ativo);     /* preenche slots vazios por padrao */
+
+    /* restaura o ULTIMO estado dos reles (NVS) e sincroniza o RX depois
+       que o C6 ja subiu (3s: evita cair na janela NOT_INIT do esp_now) */
+    uint8_t m = 0;
+    {
+        nvs_handle_t h;
+        if (nvs_open("oldskull", NVS_READONLY, &h) == ESP_OK) {
+            nvs_get_u8(h, "fxmask", &m);
+            nvs_close(h);
+        }
+    }
+    fx_mascara_enviada = m & 0x1F;
+    for (int i = 0; i < SLOT_COUNT; i++) {
+        bool on = (fx_mascara_enviada >> (i % 5)) & 1;
+        pedal_ligado[i] = !on;              /* convencao: rele ON = pedal esmaecido */
+        if (pedal_obj[i])
+            lv_obj_set_style_opa(pedal_obj[i],
+                pedal_ligado[i] ? LV_OPA_COVER : LV_OPA_20, LV_PART_MAIN);
+    }
+    lv_timer_t *tr = lv_timer_create(ev_restaura_rx, 8000, NULL);
 
     ESP_LOGI(TAG, "palco montado: %d menus", (int)QTD_MENUS);
 }
