@@ -205,14 +205,9 @@ static lv_obj_t *criar_tela(void)
     lv_obj_add_event_cb(tela, evento_toque, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(tela, evento_toque, LV_EVENT_RELEASED, NULL);
 
-    /* Label do nome do preset — atualizado pelo callback de palco.c */
-    lbl_preset_t1 = lv_label_create(tela);
-    lv_label_set_text(lbl_preset_t1, "PRESET");
-    lv_obj_set_style_bg_color(lbl_preset_t1, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(lbl_preset_t1, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_text_color(lbl_preset_t1, lv_color_hex(0xF3C969), LV_PART_MAIN);
-    lv_obj_set_style_text_font(lbl_preset_t1, &fonte_preset_42, LV_PART_MAIN);
-    lv_obj_align(lbl_preset_t1, LV_ALIGN_TOP_MID, 0, 50);
+    /* Label do nome do preset: NAO criar (o nome ja aparece no palco.c).
+       Callbacks continuam setados; com ponteiro NULL eles sao no-op. */
+    lbl_preset_t1 = NULL;
 
     return tela;
 }

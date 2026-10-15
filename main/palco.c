@@ -301,14 +301,14 @@ const char *palco_get_preset(void)
 
 #include "nvs.h"
 
-#define BANCO_QTD   3
-static char   banco_nome[BANCO_QTD][24]   = { "BANCO 1", "BANCO 2", "BANCO 3" };
-static bool   banco_pedais[BANCO_QTD][2]  = { { true, false }, { false, true }, { false, false } };
-static int    banco_amp[BANCO_QTD]        = { 0, 1, 2 };
+#define BANCO_QTD   8
+static char   banco_nome[BANCO_QTD][24]   = { "BANCO 1","BANCO 2","BANCO 3","BANCO 4","BANCO 5","BANCO 6","BANCO 7","BANCO 8" };
+static bool   banco_pedais[BANCO_QTD][2]  = { {true,false},{false,true},{true,true},{false,false},{true,false},{false,true},{true,true},{false,true} };
+static int    banco_amp[BANCO_QTD]        = { 0, 1, 2, 0, 1, 2, 0, 1 };
 static int    banco_ativo                 = 0;   /* banco em edicao/agora */
 
-static lv_obj_t *banco_lidas[3] = { NULL, NULL, NULL };   /* 'BANCO 1/2/3' text */
-static lv_obj_t *banco_btn[3]   = { NULL, NULL, NULL };   /* chips no painel preset */
+static lv_obj_t *banco_lidas[BANCO_QTD] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };   /* 'BANCO N' text */
+static lv_obj_t *banco_btn[BANCO_QTD]   = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };   /* chips no painel preset */
 static bool teclado_para_banco = false;   /* teclado edita banco em vez do preset */
 static int  banco_edit = 0;               /* banco sendo editado no 3o nivel */
 static lv_obj_t *painel_banco = NULL;     /* submenu de 3o nivel do banco */
@@ -496,9 +496,7 @@ static const cor_letra_t cores_letra[] = {
 #define QTD_CORES (sizeof(cores_letra) / sizeof(cores_letra[0]))
 
 static const submenu_t menus[] = {
-    { LV_SYMBOL_SAVE,      "PRESETS", { "Renomear", "Salvar", "Carregar", "Duplicar", NULL, NULL } },
-    { LV_SYMBOL_SHUFFLE,   "PEDAIS",  { NULL, NULL, NULL, NULL, NULL, NULL } },   /* gerado: 8 loops */
-    { LV_SYMBOL_AUDIO,     "AMP",     { "Canal 1", "Canal 2", "Canal 3", "Boost", "Trocar Amp", NULL } },
+    { LV_SYMBOL_SAVE,      "PRESETS", { "Renomear", "Salvar", NULL, NULL, NULL, NULL } },
     { LV_SYMBOL_WIFI,      "REDE",    { "WiFi", "Web: off", "ESP-NOW", "Pareamento", "Status", NULL } },
     { LV_SYMBOL_IMAGE,  "SKIN", { "Vid: lento", "Vid: normal", "Vid: rapido", "Fundo SD 1", "Fundo SD 2", "Fundo SD 3", "Fundo SD 4", "Fundo: video", NULL } },
     { LV_SYMBOL_SETTINGS,  "SISTEMA", { "Menu: abaixo", "Menu: esquerda", "Cor das letras", "Estilo das letras", "Brilho", NULL } },
@@ -885,9 +883,15 @@ static void ev_pedal_slot(lv_event_t *e)
                     pedal_ligado[origem] ? LV_OPA_COVER : LV_OPA_20, LV_PART_MAIN);
                 ESP_LOGI(TAG, "pedal slot %d -> %s",
                          origem, pedal_ligado[origem]?"ON(slot)":"sumido");
-                /* TESTE RX: fxMask fixo 0x1F (5 FX do protocolo) */
-                esp_now_tx_aplicar(banco_ativo + 1, 0x1F,
-                                   (canal_amp > 0) ? 2 : 1);
+                /* modo pedal: ativa UM relé por toque (nao 0x1F).
+                   slot -> pedal (OD/CH/DL) -> um bit do fxMask. */
+                if (pedal_ligado[origem]) {
+                    esp_now_tx_aplicar(banco_ativo + 1, 1 << (origem % (int)QTD_PEDAIS_WEB),
+                                       (canal_amp > 0) ? 2 : 1);
+                } else {
+                    esp_now_tx_aplicar(banco_ativo + 1, 0,
+                                       (canal_amp > 0) ? 2 : 1);   /* desliga o unico */
+                }
             }
             return;
         }
@@ -1176,9 +1180,8 @@ static void abrir_submenu(int idx)
 
     const int larg = 320;
     int alt;
-    if (idx == MENU_PEDAIS)      alt = 78 + 26 + (int)QTD_PEDAIS_WEB * 30 + 8 * 24;
-    else if (idx == MENU_SKIN)   alt = 54 + n * 34 + 56;
-    else if (idx == MENU_PRESETS) alt = 54 + n * 34 + 44 + 36 + 40;
+    if (idx == MENU_PRESETS) alt = 54 + n * 34 + 8 + 4 * 40 + 120;   /* itens+grade8+AMP+Qtd+hint */
+    else if (idx == MENU_SKIN) alt = 54 + n * 34 + 56;
     else                         alt = 54 + n * 34 + 48;
 
     painel_menu = lv_obj_create(lv_scr_act());
@@ -1294,16 +1297,39 @@ static void abrir_submenu(int idx)
     if (idx == MENU_PRESETS) {
         for (int i = 0; i < BANCO_QTD; i++) {
             lv_obj_t *chip = btn_mweb(painel_menu, banco_nome[i],
-                                      &fonte_cinzel_22, 96, 36);
-            lv_obj_set_pos(chip, 14 + i * 100, 54 + 4 * 34 + 8);
+                                      &fonte_cinzel_22, 96, 34);
+            int col = i % 2, row = i / 2;   /* 2 colunas x 4 linhas = 8 bancos */
+            lv_obj_set_pos(chip, 14 + col * 105, 54 + n * 34 + 8 + row * 40);
             lv_obj_add_event_cb(chip, ev_banco_editar, LV_EVENT_CLICKED,
                                 (void *)(intptr_t)i);
             banco_btn[i] = chip;
             banco_lidas[i] = (lv_obj_t *)lv_obj_get_child(chip, 0);
         }
         repintar_chips_banco();
-        lv_obj_t *h = hint_web(painel_menu, 54 + 4 * 34 + 52, larg - 28,
-            "Toque num banco para usar/editar (nomear, pedais, amp).");
+
+        /* AMP escolhido AQUI (menu AMP removido): cicla o amp do banco ativo */
+        int yamp = 54 + n * 34 + 8 + 4 * 40 + 8;
+        lv_obj_t *a = item_web(painel_menu, yamp, larg - 28, "AMP",
+                               banco_amp_names[banco_amp[banco_ativo]]);
+        lv_obj_add_event_cb(a, ev_banco_amp, LV_EVENT_CLICKED,
+                            (void *)(intptr_t)banco_ativo);
+
+        /* QTD de pedais AQUI (menu PEDAIS removido): contador do banco ativo */
+        int yq = yamp + 34;
+        lv_obj_t *lab_q = texto(painel_menu, "PEDAIS", &fonte_cinzel_16, WEB_OURO_CLARO);
+        lv_obj_set_pos(lab_q, 16, yq - 4);
+        lv_obj_t *bm = btn_mweb(painel_menu, "-", &fonte_cinzel_22, 38, 28);
+        lv_obj_set_pos(bm, 180, yq);
+        lv_obj_add_event_cb(bm, ev_qtd_pedais, LV_EVENT_CLICKED, (void *)(intptr_t)-1);
+        lv_obj_t *bp = btn_mweb(painel_menu, "+", &fonte_cinzel_22, 38, 28);
+        lv_obj_set_pos(bp, 180 + 44, yq);
+        lv_obj_add_event_cb(bp, ev_qtd_pedais, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+        char cb[8]; snprintf(cb, sizeof(cb), "%d", qtd_pedais_alvo);
+        lbl_qtd_pedais = texto(painel_menu, cb, &fonte_cinzel_22, WEB_OURO);
+        lv_obj_set_pos(lbl_qtd_pedais, 180 + 22, yq + 1);
+
+        lv_obj_t *h = hint_web(painel_menu, yq + 40, larg - 28,
+            "Toque num banco para usar/editar; AMP e Qtd Pedais do banco ativo.");
         (void)h;
     }
 
