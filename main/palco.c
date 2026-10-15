@@ -480,7 +480,7 @@ static dir_menu_t dir_menu = DIR_BAIXO;
 typedef struct {
     const char *icone;          /* simbolo LVGL: menus sem texto */
     const char *titulo;         /* usado apenas no cabecalho do submenu */
-    const char *itens[8];
+    const char *itens[9];
 } submenu_t;
 
 /* paleta de cores das letras, todas dentro da estetica steampunk */
@@ -500,7 +500,7 @@ static const submenu_t menus[] = {
     { LV_SYMBOL_SHUFFLE,   "PEDAIS",  { NULL, NULL, NULL, NULL, NULL, NULL } },   /* gerado: 8 loops */
     { LV_SYMBOL_AUDIO,     "AMP",     { "Canal 1", "Canal 2", "Canal 3", "Boost", "Trocar Amp", NULL } },
     { LV_SYMBOL_WIFI,      "REDE",    { "WiFi", "Web: off", "ESP-NOW", "Pareamento", "Status", NULL } },
-    { LV_SYMBOL_IMAGE,  "SKIN", { "Vid: lento", "Vid: normal", "Vid: rapido", "Fundo SD 1", "Fundo SD 2", "Fundo SD 3", "Fundo: video", NULL } },
+    { LV_SYMBOL_IMAGE,  "SKIN", { "Vid: lento", "Vid: normal", "Vid: rapido", "Fundo SD 1", "Fundo SD 2", "Fundo SD 3", "Fundo SD 4", "Fundo: video", NULL } },
     { LV_SYMBOL_SETTINGS,  "SISTEMA", { "Menu: abaixo", "Menu: esquerda", "Cor das letras", "Estilo das letras", "Brilho", NULL } },
     { LV_SYMBOL_VOLUME_MAX, "MIDI",    { "Canal MIDI", "Clock Sync", "Scenes", NULL, NULL, NULL } },
 };
@@ -1120,6 +1120,10 @@ static void ev_item(lv_event_t *e)
         sd_fundos_mostrar(lv_scr_act(), FUNDO_SD_3);
         fechar_submenu(); return;
     }
+    if (strcmp(nome, "Fundo SD 4") == 0) {
+        sd_fundos_mostrar(lv_scr_act(), FUNDO_SD_4);
+        fechar_submenu(); return;
+    }
     if (strcmp(nome, "Fundo: video") == 0) {
         sd_fundos_esconder();
         fechar_submenu(); return;
@@ -1168,7 +1172,7 @@ static void abrir_submenu(int idx)
     /* altura: PEDAIS = checkboxes + loops; outros = itens + hint */
     int n = 0;
     if (idx == MENU_PEDAIS) n = 8;
-    else while (n < 8 && menus[idx].itens[n]) n++;
+    else while (n < 9 && menus[idx].itens[n]) n++;
 
     const int larg = 320;
     int alt;

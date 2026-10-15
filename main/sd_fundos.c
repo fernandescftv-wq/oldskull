@@ -49,6 +49,7 @@ static const char *caminho_fundo(fundo_t t)
         case FUNDO_SD_1: return "/spiffs/images/steampunk_bg.jpg";
         case FUNDO_SD_2: return "/spiffs/images/moldura_bg.jpg";
         case FUNDO_SD_3: return "/spiffs/images/painel_bg.jpg";
+        case FUNDO_SD_4: return "/spiffs/images/novo_bg.jpg";
         default: return NULL;
     }
 }

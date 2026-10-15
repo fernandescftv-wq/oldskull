@@ -35,6 +35,7 @@ typedef enum {
     FUNDO_SD_1  = 1,   /* steampunk_bg.jpg (SPIFFS) */
     FUNDO_SD_2  = 2,   /* moldura_bg.jpg (SPIFFS) */
     FUNDO_SD_3  = 3,   /* painel_bg.jpg (SPIFFS) */
+    FUNDO_SD_4  = 4,   /* novo_bg.jpg (SPIFFS) */
     FUNDO_MAX
 } fundo_t;
 
